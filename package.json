@@ -6,6 +6,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "ncc build src/index.ts -o dist --license licenses.txt",
+    "build:no-ai": "ncc build src/index-no-ai.ts -o no-ai/dist --license licenses.txt",
+    "build:all": "npm run build && npm run build:no-ai",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
     "all": "npm run typecheck && npm run build"

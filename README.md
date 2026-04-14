@@ -26,7 +26,11 @@ Prose _quality_ is **not** graded. `@param id - the id` passes structural checks
 
 ## Usage
 
-Create `.github/workflows/tsdoc.yml` in your consumer repo:
+Two variants ship from this repo. Pick one:
+
+### Variant A — AI-powered (recommended)
+
+Generates paste-ready TSDoc blocks via GitHub Models. **Requires the org to have enabled GitHub Models.** If your org hasn't opted in, the Action will 403 with a clear error — switch to Variant B.
 
 ```yaml
 name: TSDoc Enforcer
@@ -49,7 +53,33 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-That's it. **No secrets to configure.** The `models: read` permission grants the workflow's `GITHUB_TOKEN` access to the GitHub Models inference API, which is free to use.
+### Variant B — AI-free (works everywhere)
+
+No inference call. Instead of a generated block, the comment contains a **self-contained prompt** for each violation — paste it into ChatGPT, Claude.ai, Copilot Chat, or any other AI tool, and paste the result back above the symbol. Works on any repo with zero org setup.
+
+```yaml
+name: TSDoc Enforcer
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  tsdoc:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: stephengeller/tsdoc-enforcer-action/no-ai@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Note the path suffix `/no-ai` and the absence of `models: read`.
+
+**Both variants share identical enforcement rules** — the check will flag the same symbols either way. They only differ in what the PR comment contains.
 
 ---
 

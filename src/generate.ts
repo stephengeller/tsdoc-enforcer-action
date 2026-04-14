@@ -24,14 +24,32 @@ export async function generateTsDoc(args: {
   const { githubToken, violation } = args;
   const client = new OpenAI({ apiKey: githubToken, baseURL: BASE_URL });
 
-  const response = await client.chat.completions.create({
-    model: MODEL,
-    max_tokens: MAX_TOKENS,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: buildUserMessage(violation) },
-    ],
-  });
+  let response;
+  try {
+    response = await client.chat.completions.create({
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: buildUserMessage(violation) },
+      ],
+    });
+  } catch (err) {
+    const status = (err as { status?: number })?.status;
+    if (status === 403) {
+      throw new Error(
+        "GitHub Models returned 403 — the org/repo likely hasn't enabled GitHub Models access. " +
+          "Ask an org admin to enable GitHub Models, or switch to the AI-free variant at " +
+          "stephengeller/tsdoc-enforcer-action/no-ai@v1.",
+      );
+    }
+    if (status === 429) {
+      throw new Error(
+        "GitHub Models returned 429 — free-tier rate limit hit. Retry later or split the PR.",
+      );
+    }
+    throw err;
+  }
 
   const raw = response.choices[0]?.message?.content?.trim();
   if (!raw) {
