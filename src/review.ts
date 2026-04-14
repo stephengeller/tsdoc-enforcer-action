@@ -68,7 +68,7 @@ function buildSuggestionBody(v: EnrichedViolation): string {
   return [
     `**TSDoc missing for \`${v.symbolName}\`** (${v.kind}).`,
     "",
-    "Either click **Apply suggestion** to use this generated block, or write your own — you know the intent of your code better than the model does. Either approach will satisfy the check.",
+    "Either click **Apply suggestion** to use this generated block, or write your own. Either approach will satisfy the check.",
     "",
     "```suggestion",
     `${indentedDoc}\n${v.originalLine}`,
