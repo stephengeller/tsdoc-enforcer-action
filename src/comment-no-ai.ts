@@ -2,17 +2,16 @@ import * as github from "@actions/github";
 import * as core from "@actions/core";
 
 import type { Violation } from "./types";
-import { buildPasteablePrompt } from "./prompt";
+import { buildCombinedPrompt } from "./prompt";
 
 const MARKER = "<!-- tsdoc-enforcer-no-ai -->";
 
 /**
  * Creates or updates the PR comment for the AI-free variant.
  *
- * Differs from the AI-based comment: there's no generated TSDoc block —
- * only the self-contained prompt the developer can paste into any AI tool
- * (ChatGPT, Claude.ai, Copilot Chat) to get a compliant block. Keeps the
- * developer fully in control and requires no inference access.
+ * Posts a markdown list of the undocumented symbols followed by a single
+ * collapsible prompt the developer can paste into any AI tool once to get
+ * TSDoc blocks for all symbols in a single response.
  */
 export async function upsertPrCommentNoAi(args: {
   token: string;
@@ -64,23 +63,32 @@ async function findExistingComment(
 }
 
 function renderBody(violations: Violation[]): string {
-  const header = `${MARKER}\n🚨 TSDoc missing for ${violations.length} symbol(s). Copy each prompt below into your AI tool, then paste the result above the corresponding symbol.`;
-  const sections = violations.map(renderViolation).join("\n\n");
-  return `${header}\n\n${sections}\n`;
-}
+  const header = `${MARKER}\n🚨 TSDoc missing for ${violations.length} symbol(s). Copy the prompt below into your AI tool **once**, then paste each returned block above its corresponding symbol.`;
 
-function renderViolation(v: Violation): string {
-  const summary = `\`${v.file}:${v.line}\` — \`${v.symbolName}\` (${v.kind})`;
-  const prompt = buildPasteablePrompt(v);
+  const list = violations
+    .map(
+      (v, i) =>
+        `${i + 1}. \`${v.file}:${v.line}\` — \`${v.symbolName}\` (${v.kind})`,
+    )
+    .join("\n");
+
+  const prompt = buildCombinedPrompt(violations);
 
   return [
-    "<details>",
-    `<summary>${summary}</summary>`,
+    header,
     "",
-    "````",
+    "### Symbols flagged",
+    "",
+    list,
+    "",
+    "<details>",
+    "<summary>&nbsp;<strong>Copy this prompt into your AI tool</strong></summary>",
+    "",
+    "````md",
     prompt,
     "````",
     "",
     "</details>",
+    "",
   ].join("\n");
 }
