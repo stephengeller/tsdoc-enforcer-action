@@ -1,54 +1,49 @@
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import * as core from "@actions/core";
 
 import type { Violation } from "./types";
 import { SYSTEM_PROMPT, buildUserMessage } from "./prompt";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "openai/gpt-4o-mini";
 const MAX_TOKENS = 1024;
+const BASE_URL = "https://models.github.ai/inference";
 
 /**
- * Asks Claude to produce a TSDoc block for a single undocumented symbol.
+ * Asks GitHub Models (gpt-4o-mini) to produce a TSDoc block for a single
+ * undocumented symbol.
  *
- * The returned string is the raw doc block starting with `/**` and ending
- * with `*\/`, ready to paste directly above the symbol with no further
- * post-processing.
+ * Uses the `GITHUB_TOKEN` already available in the workflow — no extra
+ * secret setup required for consumers. Returned string is the raw doc
+ * block starting with `/**` and ending with `*\/`, ready to paste
+ * directly above the symbol with no post-processing.
  */
 export async function generateTsDoc(args: {
-  apiKey: string;
+  githubToken: string;
   violation: Violation;
 }): Promise<string> {
-  const { apiKey, violation } = args;
-  const client = new Anthropic({ apiKey });
+  const { githubToken, violation } = args;
+  const client = new OpenAI({ apiKey: githubToken, baseURL: BASE_URL });
 
-  const response = await client.messages.create({
+  const response = await client.chat.completions.create({
     model: MODEL,
     max_tokens: MAX_TOKENS,
-    system: [
-      {
-        type: "text",
-        text: SYSTEM_PROMPT,
-        cache_control: { type: "ephemeral" },
-      },
-    ],
     messages: [
-      {
-        role: "user",
-        content: buildUserMessage(violation),
-      },
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: buildUserMessage(violation) },
     ],
   });
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("Claude returned no text content");
+  const raw = response.choices[0]?.message?.content?.trim();
+  if (!raw) {
+    throw new Error(
+      `GitHub Models returned no content for ${violation.symbolName}`,
+    );
   }
 
-  const raw = textBlock.text.trim();
   const block = extractDocBlock(raw);
   if (!block) {
     core.warning(
-      `Claude output didn't contain a valid TSDoc block for ${violation.symbolName}; using raw output.`,
+      `Model output didn't contain a valid TSDoc block for ${violation.symbolName}; using raw output.`,
     );
     return raw;
   }
@@ -57,7 +52,7 @@ export async function generateTsDoc(args: {
 
 /**
  * Finds the first `/** ... *\/` block in the model output. Guards against
- * the model adding chatty preamble like "Here is the TSDoc:".
+ * stray preamble like "Here is the TSDoc:" or code fences wrapping the block.
  */
 function extractDocBlock(text: string): string | undefined {
   const match = text.match(/\/\*\*[\s\S]*?\*\//);

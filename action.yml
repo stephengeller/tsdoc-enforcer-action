@@ -5,10 +5,12 @@ branding:
   icon: "book-open"
   color: "purple"
 
-# No inputs in v0.1 — opinionated defaults only.
-# Required secrets in the consuming workflow:
-#   ANTHROPIC_API_KEY — used to generate TSDoc blocks via Claude
-#   GITHUB_TOKEN      — provided automatically by GitHub, used to read the PR diff and post the comment
+# No inputs, no secrets — opinionated defaults only.
+# Consumer workflow must grant:
+#   permissions.models: read        (GitHub Models inference for TSDoc generation)
+#   permissions.pull-requests: write (to post/update the PR comment)
+#   permissions.contents: read      (to fetch changed files)
+# GITHUB_TOKEN is provided automatically by GitHub.
 
 runs:
   using: "node20"

@@ -9,14 +9,9 @@ import { upsertPrComment } from "./comment";
 async function run(): Promise<void> {
   try {
     const githubToken = process.env.GITHUB_TOKEN;
-    const anthropicKey = process.env.ANTHROPIC_API_KEY;
 
     if (!githubToken) {
       core.setFailed("GITHUB_TOKEN is required");
-      return;
-    }
-    if (!anthropicKey) {
-      core.setFailed("ANTHROPIC_API_KEY secret is required");
       return;
     }
 
@@ -56,11 +51,11 @@ async function run(): Promise<void> {
       return;
     }
 
-    core.info("Generating TSDoc blocks via Claude...");
+    core.info("Generating TSDoc blocks via GitHub Models (gpt-4o-mini)...");
     const enriched = await Promise.all(
       violations.map(async (v) => ({
         ...v,
-        tsdoc: await generateTsDoc({ apiKey: anthropicKey, violation: v }),
+        tsdoc: await generateTsDoc({ githubToken, violation: v }),
       })),
     );
 
