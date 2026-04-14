@@ -77,3 +77,37 @@ export function buildUserMessage(violation: Violation): string {
 export function buildPasteablePrompt(violation: Violation): string {
   return `${SYSTEM_PROMPT}\n\n---\n\n${buildUserMessage(violation)}`;
 }
+
+/**
+ * Returns a single prompt that asks the AI tool to generate TSDoc blocks
+ * for every violation in one pass. Used by the AI-free variant so the
+ * developer copy-pastes once instead of per-symbol.
+ *
+ * The output contract is tightened to include a location label before each
+ * block so the developer can find the right target symbol for each result.
+ */
+export function buildCombinedPrompt(violations: Violation[]): string {
+  const symbols = violations
+    .map((v, i) => {
+      return [
+        `### ${i + 1}. \`${v.file}:${v.line}\` — \`${v.symbolName}\` (${v.kind})`,
+        "",
+        "```typescript",
+        v.source,
+        "```",
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  const instruction = [
+    `Generate a TSDoc block for EACH of the ${violations.length} symbols below.`,
+    "",
+    "Before each block, emit a single-line comment marker in the exact form:",
+    "`// <file>:<line> — <symbolName>`",
+    "…so the developer can locate the right paste target for every block.",
+    "",
+    "Output ONLY the labeled blocks, in the same order as the symbols. No preamble, no trailing commentary.",
+  ].join("\n");
+
+  return `${SYSTEM_PROMPT}\n\n---\n\n${instruction}\n\n## Symbols\n\n${symbols}`;
+}

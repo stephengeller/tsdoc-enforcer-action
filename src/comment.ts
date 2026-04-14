@@ -75,7 +75,9 @@ function renderBody(violations: EnrichedViolation[]): string {
 }
 
 function renderViolation(v: EnrichedViolation): string {
-  const summary = `\`${v.file}:${v.line}\` — \`${v.symbolName}\` (${v.kind})`;
+  // `<summary>` is HTML context — GitHub does NOT parse markdown here, so
+  // backticks render literally. Use <code> tags for inline-code styling.
+  const summary = `<code>${v.file}:${v.line}</code> — <code>${v.symbolName}</code> (${v.kind})`;
   const pastePrompt = buildPasteablePrompt(v);
 
   return [
