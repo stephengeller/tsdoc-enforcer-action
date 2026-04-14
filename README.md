@@ -1,6 +1,6 @@
 # tsdoc-enforcer-action
 
-A GitHub Action that fails pull requests when exported TypeScript symbols are missing or have incomplete [TSDoc](https://tsdoc.org), and posts a single PR comment with AI-generated doc blocks — ready to paste directly above each symbol.
+A GitHub Action that fails pull requests when TypeScript symbols are missing or have incomplete [TSDoc](https://tsdoc.org), and posts a single PR comment with AI-generated doc blocks — ready to paste directly above each symbol.
 
 **Zero API keys. Zero cost.** Uses [GitHub Models](https://docs.github.com/en/github-models) (`openai/gpt-4o-mini`) with the workflow's built-in `GITHUB_TOKEN` — consumers just add a workflow YAML and it works.
 
@@ -10,17 +10,21 @@ When a violation is found, the comment also includes the exact prompt that was u
 
 ## What it checks
 
-Only **exported** symbols on changed `.ts` / `.tsx` files in the PR:
+Every **top-level** symbol on changed `.ts` / `.tsx` files in the PR, regardless of whether it's `export`ed:
 
 | Symbol                                                                   | Required                                                                  |
 | ------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| Exported function / method / class / interface / type alias              | Must have a TSDoc block with a non-empty description                      |
+| Function / method / class / interface / type alias                       | Must have a TSDoc block with a non-empty description                      |
 | Function / method with parameters                                        | `@param` for every non-underscore parameter, with a non-empty description |
 | Function / method returning anything other than `void` / `Promise<void>` | `@returns` with a non-empty description                                   |
 
-Private / protected methods, non-exported symbols, and parameters whose names start with `_` are intentionally ignored.
+Intentionally **not** checked:
 
-Prose _quality_ is **not** graded. `@param id - the id` passes structural checks even though it's useless — that's a scope decision for v1.
+- Private / protected methods inside classes
+- Parameters whose names start with `_` (convention: intentionally unused)
+- Nested functions, arrow functions assigned to variables, and other non-top-level declarations
+
+Prose _quality_ is not graded — `@param id - the id` passes structural checks even though it's useless.
 
 ---
 
@@ -135,7 +139,7 @@ GitHub Models has a free-tier rate limit shared across all workflows for the rep
 ## How it works (internals)
 
 1. **Diff** (`src/diff.ts`) — paginates `pulls.listFiles`, filters to `.ts` / `.tsx`, fetches each blob at the PR head SHA
-2. **Analyze** (`src/analyze.ts` + `src/tsdoc-rules.ts`) — [ts-morph](https://ts-morph.com) walks each source file; collects exported functions/classes/public methods/interfaces/type-aliases; applies the tag-aware predicate
+2. **Analyze** (`src/analyze.ts` + `src/tsdoc-rules.ts`) — [ts-morph](https://ts-morph.com) walks each source file; collects top-level functions/classes/public methods/interfaces/type-aliases (regardless of `export` keyword); applies the tag-aware predicate
 3. **Generate** (`src/generate.ts` + `src/prompt.ts`) — calls GitHub Models (`openai/gpt-4o-mini`) per symbol via the OpenAI-compatible endpoint at `https://models.github.ai/inference`; extracts the `/** ... */` block from the response
 4. **Comment** (`src/comment.ts`) — finds/updates the Action's comment via a hidden HTML marker; renders nested `<details>` sections
 

@@ -18,11 +18,13 @@ type DocumentableNode =
   | TypeAliasDeclaration;
 
 /**
- * Parses each changed TypeScript file and returns every exported symbol whose
+ * Parses each changed TypeScript file and returns every top-level symbol whose
  * TSDoc is missing or judged incomplete by {@link isTsDocIncomplete}.
  *
- * Non-exported / private symbols are intentionally ignored — the Action only
- * enforces documentation on the public API surface of changed files.
+ * Checks every top-level function, class, interface, and type alias regardless
+ * of whether it's `export`ed — internal helpers need docs too. For class
+ * bodies only public methods are checked; private/protected methods are
+ * intentionally skipped.
  */
 export function findUndocumentedSymbols(files: ChangedFile[]): Violation[] {
   const project = new Project({
@@ -41,19 +43,18 @@ export function findUndocumentedSymbols(files: ChangedFile[]): Violation[] {
     const ctx: CollectCtx = { filePath: file.path, lines, out: violations };
 
     for (const fn of source.getFunctions()) {
-      if (fn.isExported()) collect(fn, "function", ctx);
+      collect(fn, "function", ctx);
     }
 
     for (const iface of source.getInterfaces()) {
-      if (iface.isExported()) collect(iface, "interface", ctx);
+      collect(iface, "interface", ctx);
     }
 
     for (const alias of source.getTypeAliases()) {
-      if (alias.isExported()) collect(alias, "type-alias", ctx);
+      collect(alias, "type-alias", ctx);
     }
 
     for (const cls of source.getClasses()) {
-      if (!cls.isExported()) continue;
       collect(cls, "class", ctx);
 
       for (const method of cls.getMethods()) {
