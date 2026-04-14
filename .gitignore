@@ -5,6 +5,8 @@ node_modules/
 .env.*
 coverage/
 *.tsbuildinfo
+.idea/
+.vscode/
 
 # Build output is intentionally NOT gitignored — the dist/ bundle is what
 # consumers execute when they reference this action via `uses:`.
