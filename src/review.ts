@@ -66,7 +66,9 @@ function buildSuggestionBody(v: EnrichedViolation): string {
     .join("\n");
 
   return [
-    `**TSDoc missing for \`${v.symbolName}\`** (${v.kind}). One-click to insert:`,
+    `**TSDoc missing for \`${v.symbolName}\`** (${v.kind}).`,
+    "",
+    "Either click **Apply suggestion** to use this generated block, or write your own — you know the intent of your code better than the model does. Either approach will satisfy the check.",
     "",
     "```suggestion",
     `${indentedDoc}\n${v.originalLine}`,
@@ -83,7 +85,7 @@ function buildSummaryBody(violations: EnrichedViolation[]): string {
     .join("\n");
 
   return [
-    `🚨 TSDoc missing for ${violations.length} symbol(s). Click **Apply suggestion** on each inline comment below to insert the generated block.`,
+    `🚨 TSDoc missing for ${violations.length} symbol(s). For each inline comment below, either click **Apply suggestion** to use the generated TSDoc or write your own — either will satisfy the check.`,
     "",
     list,
   ].join("\n");
