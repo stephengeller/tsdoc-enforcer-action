@@ -1,9 +1,9 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
 
-import { getChangedTypeScriptFiles } from "./diff";
-import { findUndocumentedSymbols } from "./analyze";
-import { upsertPrCommentNoAi } from "./comment-no-ai";
+import { getChangedTypeScriptFiles } from "../core/diff";
+import { findUndocumentedSymbols } from "../core/analyze";
+import { upsertPrComment } from "./comment";
 
 async function run(): Promise<void> {
   try {
@@ -49,7 +49,7 @@ async function run(): Promise<void> {
       return;
     }
 
-    await upsertPrCommentNoAi({
+    await upsertPrComment({
       token: githubToken,
       owner,
       repo,

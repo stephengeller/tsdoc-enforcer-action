@@ -1,8 +1,8 @@
 import * as github from "@actions/github";
 import * as core from "@actions/core";
 
-import type { Violation } from "./types";
-import { buildCombinedPrompt } from "./prompt";
+import type { Violation } from "../core/types";
+import { buildCombinedPrompt } from "../core/prompt";
 
 const MARKER = "<!-- tsdoc-enforcer-no-ai -->";
 
@@ -13,7 +13,7 @@ const MARKER = "<!-- tsdoc-enforcer-no-ai -->";
  * collapsible prompt the developer can paste into any AI tool once to get
  * TSDoc blocks for all symbols in a single response.
  */
-export async function upsertPrCommentNoAi(args: {
+export async function upsertPrComment(args: {
   token: string;
   owner: string;
   repo: string;
