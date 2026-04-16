@@ -1,5 +1,5 @@
-name: "TSDoc Enforcer"
-description: "Fails PRs that add exported TypeScript symbols without TSDoc, and posts AI-generated doc blocks ready to paste."
+name: "TSDoc Enforcer (Suggest)"
+description: "Fails PRs that add TypeScript symbols without TSDoc, and posts AI-generated doc blocks as inline suggestions."
 author: "stephengeller"
 branding:
   icon: "book-open"
