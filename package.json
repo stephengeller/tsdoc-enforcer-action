@@ -5,9 +5,9 @@
   "description": "GitHub Action that enforces TSDoc on TypeScript PRs and generates paste-ready doc blocks via Claude.",
   "main": "dist/index.js",
   "scripts": {
-    "build": "ncc build src/index.ts -o dist --license licenses.txt",
-    "build:no-ai": "ncc build src/index-no-ai.ts -o no-ai/dist --license licenses.txt",
-    "build:all": "npm run build && npm run build:no-ai",
+    "build": "ncc build src/suggest/index.ts -o dist --license licenses.txt",
+    "build:report": "ncc build src/report/index.ts -o report/dist --license licenses.txt",
+    "build:all": "npm run build && npm run build:report",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
     "all": "npm run typecheck && npm run build"
@@ -23,8 +23,8 @@
   "dependencies": {
     "@actions/core": "^1.10.1",
     "@actions/github": "^6.0.0",
+    "@anthropic-ai/sdk": "^0.90.0",
     "@octokit/rest": "^21.0.2",
-    "openai": "^6.34.0",
     "ts-morph": "^24.0.0"
   },
   "devDependencies": {

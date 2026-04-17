@@ -1,16 +1,40 @@
-name: "TSDoc Enforcer"
-description: "Fails PRs that add exported TypeScript symbols without TSDoc, and posts AI-generated doc blocks ready to paste."
+name: "TSDoc Enforcer (Suggest)"
+description: "Fails PRs that add TypeScript symbols without TSDoc or without a why-shaped @remarks. Uses Anthropic Claude to either suggest an inline TSDoc or ask the author targeted questions about the why."
 author: "stephengeller"
 branding:
   icon: "book-open"
   color: "purple"
 
-# No inputs, no secrets — opinionated defaults only.
 # Consumer workflow must grant:
-#   permissions.models: read        (GitHub Models inference for TSDoc generation)
-#   permissions.pull-requests: write (to post/update the PR comment)
+#   permissions.pull-requests: write (to post the PR review + inline comments)
 #   permissions.contents: read      (to fetch changed files)
-# GITHUB_TOKEN is provided automatically by GitHub.
+# GITHUB_TOKEN is provided automatically by GitHub. ANTHROPIC_API_KEY must
+# be supplied as a secret and passed in via the `anthropic-api-key` input.
+
+inputs:
+  anthropic-api-key:
+    description: "Anthropic API key used to call Claude for per-symbol why-inference. Required. Pass via a workflow secret — see README for an example workflow."
+    required: true
+  anthropic-model:
+    description: "Claude model ID used for why-inference. Defaults to `claude-sonnet-4-6` — best price/quality for short structured outputs. Override to `claude-opus-4-7` for harder inference or `claude-haiku-4-5-20251001` for faster/cheaper runs."
+    required: false
+    default: "claude-sonnet-4-6"
+  bypass-label:
+    description: "Apply this label to a PR to soft-bypass the why-check. When applied, AI inference is skipped entirely and the check passes. Use sparingly — it's the escape hatch, not the default."
+    required: false
+    default: "why-acknowledged"
+  min-remarks-words:
+    description: "Minimum word count for a @remarks block to satisfy the why-acceptance predicate. Counted after stripping {@link ...} fragments."
+    required: false
+    default: "15"
+  why-keywords:
+    description: "Comma-separated list of causal/constraint keywords that count as a why-signal. A @remarks block must contain at least one keyword OR a number-with-unit (e.g. 200ms) OR a {@link} reference."
+    required: false
+    default: "because,so that,to ensure,must,cannot,requires,avoid,prevent,invariant,otherwise"
+  max-symbols-for-ai:
+    description: "Hard cap on how many symbols the action will send to Claude in a single PR run. PRs above this cap skip AI entirely and post a one-line summary asking the author to document manually or apply the bypass label. Guards against runaway AI spend on mechanical/refactor PRs."
+    required: false
+    default: "25"
 
 runs:
   using: "node20"
