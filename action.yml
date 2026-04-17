@@ -13,7 +13,7 @@ branding:
 
 inputs:
   anthropic-api-key:
-    description: "Anthropic API key used to call Claude for per-symbol why-inference. Required. Pass via a workflow secret, e.g. `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`."
+    description: "Anthropic API key used to call Claude for per-symbol why-inference. Required. Pass via a workflow secret — see README for an example workflow."
     required: true
   anthropic-model:
     description: "Claude model ID used for why-inference. Defaults to `claude-sonnet-4-6` — best price/quality for short structured outputs. Override to `claude-opus-4-7` for harder inference or `claude-haiku-4-5-20251001` for faster/cheaper runs."
