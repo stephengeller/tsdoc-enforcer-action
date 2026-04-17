@@ -10,6 +10,12 @@ export interface ChangedFile {
 
 /**
  * An exported symbol missing (or with incomplete) TSDoc. Raw — no AI output yet.
+ *
+ * @remarks
+ * A symbol becomes a `Violation` when at least one of `structuralIncomplete`
+ * or `whyStatus !== "ok"` is true. Both signals are surfaced because the
+ * report comment shows targeted reasons per symbol and the AI variant uses
+ * `whyStatus` to decide whether to ask the author for the why.
  */
 export interface Violation {
   file: string;
@@ -24,12 +30,22 @@ export interface Violation {
    * and its indentation beneath the inserted TSDoc.
    */
   originalLine: string;
-}
-
-/**
- * A violation plus the Claude-generated TSDoc block, ready to paste above the symbol.
- */
-export interface EnrichedViolation extends Violation {
-  /** TSDoc block starting with `/**` and ending with `*\/`. */
-  tsdoc: string;
+  /**
+   * `true` when the structural TSDoc check (description / `@param` /
+   * `@returns` presence) fails. See {@link isTsDocIncomplete}.
+   */
+  structuralIncomplete: boolean;
+  /**
+   * State of the symbol's `@remarks` block per the why-acceptance predicate
+   * in {@link hasAcceptableRemarks}. `"missing"` means the tag is absent;
+   * `"weak"` means present but failed a clause; `"ok"` means it passed (and
+   * the symbol is in the violations list only because `structuralIncomplete`
+   * is true).
+   */
+  whyStatus: "ok" | "weak" | "missing";
+  /**
+   * Human-readable explanation of which clause of the why-predicate failed.
+   * Undefined when `whyStatus === "ok"`.
+   */
+  whyFailureReason?: string;
 }

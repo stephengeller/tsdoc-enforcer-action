@@ -1,15 +1,28 @@
 name: "TSDoc Enforcer (Report)"
-description: "Fails PRs that add TypeScript symbols without TSDoc. Posts a PR comment listing missing docs with a paste-ready AI prompt."
+description: "Fails PRs that add TypeScript symbols without TSDoc or without a why-shaped @remarks. Posts a PR comment with per-symbol reasons, a templated remarks skeleton, and a paste-ready AI prompt."
 author: "stephengeller"
 branding:
   icon: "book-open"
   color: "gray-dark"
 
-# No inputs, no secrets, no AI inference.
 # Consumer workflow must grant:
 #   permissions.pull-requests: write (to post/update the PR comment)
 #   permissions.contents: read      (to fetch changed files)
 # GITHUB_TOKEN is provided automatically by GitHub.
+
+inputs:
+  bypass-label:
+    description: "Apply this label to a PR to soft-bypass the why-check (comment becomes informational, check passes). Use sparingly — it's the escape hatch, not the default."
+    required: false
+    default: "why-acknowledged"
+  min-remarks-words:
+    description: "Minimum word count for a @remarks block to satisfy the why-acceptance predicate. Counted after stripping {@link ...} fragments."
+    required: false
+    default: "15"
+  why-keywords:
+    description: "Comma-separated list of causal/constraint keywords that count as a why-signal. A @remarks block must contain at least one keyword OR a number-with-unit (e.g. 200ms) OR a {@link} reference."
+    required: false
+    default: "because,so that,to ensure,must,cannot,requires,avoid,prevent,invariant,otherwise"
 
 runs:
   using: "node20"

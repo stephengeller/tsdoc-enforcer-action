@@ -9,6 +9,11 @@ import type {
 
 import type { ChangedFile, Violation } from "./types";
 import { isTsDocIncomplete } from "./tsdoc-rules";
+import {
+  classifyWhy,
+  DEFAULT_WHY_RULES_CONFIG,
+  type WhyRulesConfig,
+} from "./why-rules";
 
 type DocumentableNode =
   | FunctionDeclaration
@@ -18,15 +23,30 @@ type DocumentableNode =
   | TypeAliasDeclaration;
 
 /**
- * Parses each changed TypeScript file and returns every top-level symbol whose
- * TSDoc is missing or judged incomplete by {@link isTsDocIncomplete}.
+ * Parses each changed TypeScript file and returns every top-level symbol that
+ * fails the structural TSDoc check {@link isTsDocIncomplete} OR the
+ * why-acceptance predicate {@link hasAcceptableRemarks}.
  *
+ * @remarks
  * Checks every top-level function, class, interface, and type alias regardless
  * of whether it's `export`ed — internal helpers need docs too. For class
  * bodies only public methods are checked; private/protected methods are
- * intentionally skipped.
+ * intentionally skipped because the why for an internal helper rarely needs
+ * to be defended in the same way as a public surface.
+ *
+ * @param files - Changed TypeScript files at the PR head SHA.
+ * @param whyConfig - Optional override for the why-acceptance predicate's
+ *   word-count threshold and keyword set. Defaults to
+ *   {@link DEFAULT_WHY_RULES_CONFIG}; the report variant wires this to
+ *   `min-remarks-words` and `why-keywords` action inputs.
+ * @returns Every symbol with at least one failing signal, populated with both
+ *   `structuralIncomplete` and `whyStatus` so the renderer can show targeted
+ *   reasons per symbol.
  */
-export function findUndocumentedSymbols(files: ChangedFile[]): Violation[] {
+export function findUndocumentedSymbols(
+  files: ChangedFile[],
+  whyConfig: WhyRulesConfig = DEFAULT_WHY_RULES_CONFIG,
+): Violation[] {
   const project = new Project({
     useInMemoryFileSystem: true,
     compilerOptions: { allowJs: false, noEmit: true },
@@ -40,7 +60,12 @@ export function findUndocumentedSymbols(files: ChangedFile[]): Violation[] {
     });
     const lines = file.content.split("\n");
 
-    const ctx: CollectCtx = { filePath: file.path, lines, out: violations };
+    const ctx: CollectCtx = {
+      filePath: file.path,
+      lines,
+      out: violations,
+      whyConfig,
+    };
 
     for (const fn of source.getFunctions()) {
       collect(fn, "function", ctx);
@@ -75,6 +100,7 @@ interface CollectCtx {
   filePath: string;
   lines: string[];
   out: Violation[];
+  whyConfig: WhyRulesConfig;
 }
 
 function collect(
@@ -86,7 +112,13 @@ function collect(
   const name = getName(node);
   if (!name) return;
 
-  if (!isTsDocIncomplete({ node, jsDocs, kind })) return;
+  const structuralIncomplete = isTsDocIncomplete({ node, jsDocs, kind });
+  const remarksText = extractRemarksText(jsDocs);
+  const why = classifyWhy(remarksText);
+
+  // A symbol is only reported when at least one signal fails. A symbol with
+  // complete structural TSDoc and an acceptable @remarks is silently passing.
+  if (!structuralIncomplete && why.status === "ok") return;
 
   const line = node.getStartLineNumber();
   // `lines` is 0-indexed; `line` is 1-indexed. Fallback to empty string
@@ -100,7 +132,30 @@ function collect(
     kind,
     source: truncateForPrompt(node.getText()),
     originalLine,
+    structuralIncomplete,
+    whyStatus: why.status,
+    whyFailureReason: why.reason,
   });
+}
+
+/**
+ * Returns the prose body of the symbol's `@remarks` tag, or `undefined` when
+ * no such tag exists. Concatenates with a single space when an author has
+ * (legally) split the why across multiple `@remarks` blocks on the same
+ * symbol — the predicate operates on the full prose.
+ */
+function extractRemarksText(jsDocs: JSDoc[]): string | undefined {
+  if (!jsDocs.length) return undefined;
+  const parts: string[] = [];
+  for (const doc of jsDocs) {
+    for (const tag of doc.getTags()) {
+      if (tag.getTagName() !== "remarks") continue;
+      const comment = (tag.getCommentText() ?? "").trim();
+      if (comment) parts.push(comment);
+    }
+  }
+  if (!parts.length) return undefined;
+  return parts.join(" ");
 }
 
 function getName(node: DocumentableNode): string | undefined {

@@ -1,78 +1,312 @@
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import * as core from "@actions/core";
 
 import type { Violation } from "../core/types";
-import { SYSTEM_PROMPT, buildUserMessage } from "../core/prompt";
-
-const MODEL = "openai/gpt-4o-mini";
-const MAX_TOKENS = 1024;
-const BASE_URL = "https://models.github.ai/inference";
+import { SYSTEM_PROMPT, buildWhyDecisionMessage } from "../core/prompt";
 
 /**
- * Asks GitHub Models (gpt-4o-mini) to produce a TSDoc block for a single
- * undocumented symbol.
- *
- * Uses the `GITHUB_TOKEN` already available in the workflow — no extra
- * secret setup required for consumers. Returned string is the raw doc
- * block starting with `/**` and ending with `*\/`, ready to paste
- * directly above the symbol with no post-processing.
+ * Default model for the suggest variant. Sonnet 4.6 picks the price/quality
+ * sweet spot for short structured outputs and is overridable via the
+ * `anthropic-model` action input when teams want a faster/cheaper or
+ * smarter/more-expensive tradeoff.
  */
-export async function generateTsDoc(args: {
-  githubToken: string;
-  violation: Violation;
-}): Promise<string> {
-  const { githubToken, violation } = args;
-  const client = new OpenAI({ apiKey: githubToken, baseURL: BASE_URL });
+export const DEFAULT_MODEL = "claude-sonnet-4-6";
 
-  let response;
+const MAX_TOKENS = 1024;
+
+/**
+ * Confidence floor for honoring a `suggest` decision.
+ *
+ * @remarks
+ * Below this threshold we force the decision to `ask` regardless of what the
+ * model said it wanted to do. This is the no-bluffing gate from the design
+ * doc — it's why the structured output schema includes `confidence` as a
+ * required field. Empirically Sonnet self-rates conservatively, so the cap
+ * mainly catches cases where the model would otherwise paper over
+ * non-inferable invariants with plausible-sounding prose.
+ */
+const CONFIDENCE_FLOOR = 0.7;
+
+/**
+ * Structured output the AI variant routes on. Mirrors the `WhyDecision`
+ * union from the plan — `suggest` carries the full TSDoc, `ask` carries
+ * targeted questions for the author, `skip` opts out for genuinely trivial
+ * symbols.
+ */
+export type WhyDecision =
+  | {
+      action: "suggest";
+      tsdocFull: string;
+      remarksDraft: string;
+      confidence: number;
+      rationale: string;
+    }
+  | {
+      action: "ask";
+      questions: string[];
+      confidence: number;
+      rationale: string;
+    }
+  | {
+      action: "skip";
+      reason: "trivial" | "private-helper" | "pure-restatement";
+      confidence: number;
+      rationale?: string;
+    };
+
+const WHY_DECISION_TOOL: Anthropic.Tool = {
+  name: "record_why_decision",
+  description:
+    "Record your decision for this symbol: suggest a TSDoc with @remarks, ask the author specific questions, or skip if the symbol is genuinely trivial.",
+  input_schema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["suggest", "ask", "skip"],
+        description:
+          "What to do for this symbol. `suggest` only when the why is inferable from the source.",
+      },
+      tsdocFull: {
+        type: "string",
+        description:
+          "Full TSDoc block (`/**` … `*/`) including a why-shaped `@remarks`. Required when action='suggest'.",
+      },
+      remarksDraft: {
+        type: "string",
+        description:
+          "The body of the `@remarks` block alone (without the `@remarks` tag prefix). Required when action='suggest'.",
+      },
+      questions: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "3–5 specific questions a senior reviewer would ask the author about this symbol. Required when action='ask'.",
+      },
+      reason: {
+        type: "string",
+        enum: ["trivial", "private-helper", "pure-restatement"],
+        description:
+          "Why the symbol is being skipped. Required when action='skip'.",
+      },
+      confidence: {
+        type: "number",
+        description:
+          "Self-rated confidence in the decision, 0–1. Be honest — values below 0.7 cause `suggest` to be downgraded to `ask`.",
+      },
+      rationale: {
+        type: "string",
+        description:
+          "One short sentence justifying the decision. Logged for diagnostics.",
+      },
+    },
+    required: ["action", "confidence"],
+  },
+};
+
+/**
+ * Asks Claude to decide what to do for one undocumented symbol.
+ *
+ * @remarks
+ * Sends the static `SYSTEM_PROMPT` as a cached system block (`cache_control:
+ * ephemeral`) so subsequent symbols in the same PR run are billed at the
+ * cache-read rate rather than re-paying for the full prefix. The volatile
+ * per-symbol payload is the user message, which carries the violation's
+ * `whyStatus`, `whyFailureReason`, and source slice.
+ *
+ * Forces the response through the `record_why_decision` tool so the output
+ * is structured JSON rather than free-form text — the schema is stable
+ * across SDK versions, and parsing is a single `tool_use` block lookup.
+ *
+ * The `confidence < {@link CONFIDENCE_FLOOR}` clamp downgrades any low-
+ * confidence `suggest` to `ask`, preserving the no-bluffing invariant from
+ * the design doc.
+ *
+ * @param args - Anthropic API key, optional model override, and the
+ *   {@link Violation} to decide on.
+ * @returns The (possibly clamped) {@link WhyDecision} for routing in the
+ *   review layer.
+ */
+export async function decideWhy(args: {
+  apiKey: string;
+  model?: string;
+  violation: Violation;
+}): Promise<WhyDecision> {
+  const { apiKey, violation } = args;
+  const model = args.model || DEFAULT_MODEL;
+  const client = new Anthropic({ apiKey });
+
+  let response: Anthropic.Message;
   try {
-    response = await client.chat.completions.create({
-      model: MODEL,
+    response = await client.messages.create({
+      model,
       max_tokens: MAX_TOKENS,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: buildUserMessage(violation) },
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
       ],
+      tools: [WHY_DECISION_TOOL],
+      tool_choice: { type: "tool", name: WHY_DECISION_TOOL.name },
+      messages: [{ role: "user", content: buildWhyDecisionMessage(violation) }],
     });
   } catch (err) {
     const status = (err as { status?: number })?.status;
-    if (status === 403) {
+    if (status === 401) {
       throw new Error(
-        "GitHub Models returned 403 — the org/repo likely hasn't enabled GitHub Models access. " +
-          "Ask an org admin to enable GitHub Models, or switch to the AI-free variant at " +
-          "stephengeller/tsdoc-enforcer-action/no-ai@v1.",
+        "Anthropic API returned 401 — `anthropic-api-key` input is missing or invalid. " +
+          "Set it from a workflow secret, e.g. `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`.",
       );
     }
     if (status === 429) {
       throw new Error(
-        "GitHub Models returned 429 — free-tier rate limit hit. Retry later or split the PR.",
+        "Anthropic API returned 429 — your org's rate limit is exhausted. " +
+          "Retry later, lower `max-symbols-for-ai`, or split the PR.",
       );
     }
     throw err;
   }
 
-  const raw = response.choices[0]?.message?.content?.trim();
-  if (!raw) {
+  logCacheUsage(response.usage, violation.symbolName);
+
+  const decision = parseDecision(response, violation.symbolName);
+  return clampLowConfidence(decision);
+}
+
+function parseDecision(
+  message: Anthropic.Message,
+  symbolName: string,
+): WhyDecision {
+  const toolUse = message.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  );
+  if (!toolUse) {
     throw new Error(
-      `GitHub Models returned no content for ${violation.symbolName}`,
+      `Claude response for ${symbolName} did not include a tool_use block. ` +
+        `Stop reason: ${message.stop_reason}.`,
     );
   }
 
-  const block = extractDocBlock(raw);
-  if (!block) {
-    core.warning(
-      `Model output didn't contain a valid TSDoc block for ${violation.symbolName}; using raw output.`,
-    );
-    return raw;
+  const input = toolUse.input as Record<string, unknown>;
+  const action = input.action;
+  const confidence =
+    typeof input.confidence === "number" ? input.confidence : 0;
+
+  if (action === "suggest") {
+    const tsdocFull = stringField(input, "tsdocFull");
+    const remarksDraft = stringField(input, "remarksDraft");
+    if (!tsdocFull || !remarksDraft) {
+      // Model said suggest but didn't supply the required fields — treat as
+      // ask with a generic prompt rather than crashing the whole run.
+      core.warning(
+        `Claude action=suggest for ${symbolName} missing tsdocFull/remarksDraft; downgrading to ask.`,
+      );
+      return {
+        action: "ask",
+        questions: [
+          "What constraint, invariant, or upstream behaviour forced this symbol's current shape?",
+          "Are there integration quirks (rate limits, ordering requirements, retries) that future maintainers must preserve?",
+        ],
+        confidence,
+        rationale:
+          "Fallback: model returned action=suggest without TSDoc payload.",
+      };
+    }
+    return {
+      action: "suggest",
+      tsdocFull,
+      remarksDraft,
+      confidence,
+      rationale: stringField(input, "rationale") ?? "",
+    };
   }
-  return block;
+
+  if (action === "ask") {
+    const questions = Array.isArray(input.questions)
+      ? input.questions.filter((q): q is string => typeof q === "string")
+      : [];
+    if (questions.length === 0) {
+      throw new Error(
+        `Claude action=ask for ${symbolName} returned no questions.`,
+      );
+    }
+    return {
+      action: "ask",
+      questions,
+      confidence,
+      rationale: stringField(input, "rationale") ?? "",
+    };
+  }
+
+  if (action === "skip") {
+    const reason = stringField(input, "reason");
+    const allowed = ["trivial", "private-helper", "pure-restatement"] as const;
+    const validReason = allowed.find((r) => r === reason) ?? "trivial";
+    return {
+      action: "skip",
+      reason: validReason,
+      confidence,
+      rationale: stringField(input, "rationale"),
+    };
+  }
+
+  throw new Error(
+    `Claude returned unrecognized action='${String(action)}' for ${symbolName}.`,
+  );
 }
 
 /**
- * Finds the first `/** ... *\/` block in the model output. Guards against
- * stray preamble like "Here is the TSDoc:" or code fences wrapping the block.
+ * Forces a low-confidence `suggest` to become `ask` so the model cannot
+ * paper over non-inferable invariants with plausible-sounding prose.
+ *
+ * @remarks
+ * When the downgrade fires we synthesize generic fallback questions because
+ * Claude's `ask` payload is on the alternate branch of the union. Logged at
+ * info level so we can tell from the run log which symbols got clamped vs
+ * which Claude already picked `ask` for.
  */
-function extractDocBlock(text: string): string | undefined {
-  const match = text.match(/\/\*\*[\s\S]*?\*\//);
-  return match?.[0];
+function clampLowConfidence(d: WhyDecision): WhyDecision {
+  if (d.action !== "suggest") return d;
+  if (d.confidence >= CONFIDENCE_FLOOR) return d;
+  core.info(
+    `Confidence ${d.confidence.toFixed(2)} < ${CONFIDENCE_FLOOR} — downgrading suggest to ask.`,
+  );
+  return {
+    action: "ask",
+    questions: [
+      "What constraint, invariant, or upstream behaviour shaped this symbol?",
+      "Are there integration quirks (rate limits, ordering requirements, retries) that future maintainers must preserve?",
+      "Why is the current return/error shape what it is — what was the alternative and why was it rejected?",
+    ],
+    confidence: d.confidence,
+    rationale: `Downgraded from suggest (confidence ${d.confidence.toFixed(2)} < ${CONFIDENCE_FLOOR}). Original draft: ${truncate(d.remarksDraft, 120)}`,
+  };
+}
+
+function stringField(
+  o: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const v = o[key];
+  return typeof v === "string" ? v : undefined;
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+function logCacheUsage(usage: Anthropic.Usage, symbolName: string): void {
+  // Cache hit/miss reporting helps catch regressions where a prompt edit
+  // accidentally invalidates the system-block cache (e.g. dynamic content
+  // sneaking in). Logged per call rather than aggregated because the action
+  // log is short and per-symbol granularity makes the cause obvious.
+  const created = usage.cache_creation_input_tokens ?? 0;
+  const read = usage.cache_read_input_tokens ?? 0;
+  if (created > 0 || read > 0) {
+    core.info(
+      `[${symbolName}] cache_creation=${created} cache_read=${read} input=${usage.input_tokens} output=${usage.output_tokens}`,
+    );
+  }
 }
