@@ -1,10 +1,12 @@
 # tsdoc-enforcer-action
 
-A GitHub Action that fails pull requests when TypeScript symbols are missing or have incomplete [TSDoc](https://tsdoc.org), and posts a single PR comment with AI-generated doc blocks — ready to paste directly above each symbol.
+A GitHub Action that fails pull requests when TypeScript symbols are missing or have incomplete [TSDoc](https://tsdoc.org), and — on top of structural checks — enforces a *why-shaped* `@remarks` block so reviewers and future maintainers can see the motivation, constraints, and invariants behind each symbol.
 
-**Zero API keys. Zero cost.** Uses [GitHub Models](https://docs.github.com/en/github-models) (`openai/gpt-4o-mini`) with the workflow's built-in `GITHUB_TOKEN` — consumers just add a workflow YAML and it works.
+Ships three variants from this repo:
 
-When a violation is found, the comment also includes the exact prompt that was used to generate the block, so you can regenerate or tweak it in ChatGPT, Claude.ai, Copilot Chat, or any other AI tool.
+- **`suggest`** (root, Anthropic Claude) — posts a PR review with an inline TSDoc suggestion for each symbol whose why is inferable, or targeted questions when it isn't.
+- **`reply`** (`/reply`) — reacts to review-comment replies on the suggest threads: Claude turns the author's why into a complete TSDoc block and commits it back to the PR head.
+- **`report`** (`/report`, AI-free) — no inference call. Posts a single PR comment listing every violation with a paste-ready prompt you can drop into any AI tool.
 
 ---
 
@@ -30,60 +32,89 @@ Prose _quality_ is not graded — `@param id - the id` passes structural checks 
 
 ## Usage
 
-Two variants ship from this repo. Pick one:
+All three variants share identical structural + why-capture enforcement rules; they differ only in what they post and whether they require an Anthropic key.
 
-### Variant A — AI-powered (recommended)
-
-Generates paste-ready TSDoc blocks via GitHub Models. **Requires the org to have enabled GitHub Models.** If your org hasn't opted in, the Action will 403 with a clear error — switch to Variant B.
+### suggest — Claude-powered inline review (recommended)
 
 ```yaml
 name: TSDoc Enforcer
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 jobs:
-  tsdoc:
+  suggest:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
-      models: read
     steps:
       - uses: actions/checkout@v4
-      - uses: stephengeller/tsdoc-enforcer-action@v1
+      - uses: stephengeller/tsdoc-enforcer-action@main
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### Variant B — AI-free (works everywhere)
+Set an `ANTHROPIC_API_KEY` repo secret first. Apply the `why-acknowledged` label on a PR to bypass the check (useful for mechanical refactors where authoring `@remarks` per symbol adds no value).
 
-No inference call. Instead of a generated block, the comment contains a **self-contained prompt** for each violation — paste it into ChatGPT, Claude.ai, Copilot Chat, or any other AI tool, and paste the result back above the symbol. Works on any repo with zero org setup.
+### reply — commit the author's why back as TSDoc
+
+Pair with the suggest variant. When an author replies to one of its inline comments, Claude turns the reply into a complete TSDoc block and commits it directly to the PR branch.
 
 ```yaml
-name: TSDoc Enforcer
+name: TSDoc Apply Reply
+
+on:
+  pull_request_review_comment:
+    types: [created]
+
+concurrency:
+  group: tsdoc-reply-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: stephengeller/tsdoc-enforcer-action/reply@main
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+The handler only reacts to replies on threads it posted (identified by a hidden marker), never on unrelated review comments, and never on its own bot replies. Fork PRs fall back to a manual-apply hint because the default `GITHUB_TOKEN` is read-only on forks.
+
+### report — AI-free, paste-ready prompt
+
+No Anthropic key required. Posts one PR comment listing every violation with a consolidated prompt you can drop into any AI tool.
+
+```yaml
+name: TSDoc Enforcer (report)
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 jobs:
-  tsdoc:
+  report:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: stephengeller/tsdoc-enforcer-action/no-ai@v1
+      - uses: stephengeller/tsdoc-enforcer-action/report@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
-
-Note the path suffix `/no-ai` and the absence of `models: read`.
-
-**Both variants share identical enforcement rules** — the check will flag the same symbols either way. They only differ in what the PR comment contains.
 
 ---
 
@@ -130,18 +161,22 @@ The comment upserts — pushing more commits to the PR updates the existing comm
 
 ---
 
-## Rate limits
+## Rate limits and cost
 
-GitHub Models has a free-tier rate limit shared across all workflows for the repo/org. If you exceed it on an unusually large PR, the Action will report the limit error and fail — fix is either retry later or split the PR. For typical volume (tens of flagged symbols per PR, handful of PRs per day) you won't hit it.
+Anthropic enforces per-workspace rate limits that vary by tier; a single PR hitting dozens of symbols can burst through the per-minute cap. The suggest variant has a `max-symbols-for-ai` input (default `25`) that guards against runaway spend on large mechanical PRs — above that cap, the check posts a one-line summary and asks the author to either document manually or apply the bypass label.
+
+The report variant makes zero inference calls and has no Anthropic rate-limit exposure.
 
 ---
 
 ## How it works (internals)
 
-1. **Diff** (`src/diff.ts`) — paginates `pulls.listFiles`, filters to `.ts` / `.tsx`, fetches each blob at the PR head SHA
-2. **Analyze** (`src/analyze.ts` + `src/tsdoc-rules.ts`) — [ts-morph](https://ts-morph.com) walks each source file; collects top-level functions/classes/public methods/interfaces/type-aliases (regardless of `export` keyword); applies the tag-aware predicate
-3. **Generate** (`src/generate.ts` + `src/prompt.ts`) — calls GitHub Models (`openai/gpt-4o-mini`) per symbol via the OpenAI-compatible endpoint at `https://models.github.ai/inference`; extracts the `/** ... */` block from the response
-4. **Comment** (`src/comment.ts`) — finds/updates the Action's comment via a hidden HTML marker; renders nested `<details>` sections
+1. **Diff** (`src/core/diff.ts`) — paginates `pulls.listFiles`, filters to `.ts` / `.tsx`, fetches each blob at the PR head SHA.
+2. **Analyze** (`src/core/analyze.ts` + `src/core/tsdoc-rules.ts` + `src/core/why-rules.ts`) — [ts-morph](https://ts-morph.com) walks each source file; collects top-level functions / classes / public methods / interfaces / type-aliases (regardless of `export` keyword); applies both the structural TSDoc predicate and the rule-based why-acceptance predicate.
+3. **Route/render** — the suggest variant calls Anthropic Claude per symbol via the `record_why_decision` tool and posts a PR review with inline suggestions or questions; the report variant skips inference and upserts a single PR comment with a consolidated prompt.
+4. **Reply** (`src/suggest/reply.ts`) — triggered by `pull_request_review_comment: [created]`; validates the thread is one of ours via a hidden marker, turns the reply body into a TSDoc block, commits it to the PR head branch, and resolves the thread.
+
+The rule-based why-acceptance predicate is deterministic — Claude authors *candidate* remarks, but the predicate alone decides pass/fail, so the check never flaps between runs on identical code.
 
 ---
 
@@ -150,10 +185,10 @@ GitHub Models has a free-tier rate limit shared across all workflows for the rep
 ```bash
 npm install
 npm run typecheck
-npm run build          # produces dist/index.js via @vercel/ncc
+npm run build:all      # builds dist/, report/dist/, reply/dist/ via @vercel/ncc
 ```
 
-The `dist/` bundle is committed because GitHub Actions runners execute it directly — no `npm install` happens on the consumer side.
+The `dist/` bundles are committed because GitHub Actions runners execute them directly — no `npm install` happens on the consumer side.
 
 ---
 
@@ -161,8 +196,7 @@ The `dist/` bundle is committed because GitHub Actions runners execute it direct
 
 - Prose-quality grading via a second model pass (would catch `@param id - the id`)
 - `@throws` enforcement on functions containing `throw` statements
-- Configurable inputs (model choice, strictness level)
-- Optional provider override (use a paid Anthropic/OpenAI key for better output)
+- Cut a stable release tag once the three-variant shape settles
 
 ## License
 
