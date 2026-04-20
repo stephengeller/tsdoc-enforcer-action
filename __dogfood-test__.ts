@@ -8,6 +8,16 @@ const RATE_LIMIT_DELAY_MS = 200; // upstream allows at most 5 rps
 // `suggest` case: nearby named constant + explanatory comment, so the why
 // is inferable. Claude should emit a full TSDoc whose @remarks references
 // the 200ms delay and the upstream rate limit.
+/**
+ * Fetches a row by its `id`, returning `null` when no matching row exists.
+ *
+ * @remarks
+ * Inserts a delay of {@link RATE_LIMIT_DELAY_MS} before resolving because the
+ * OAF enforcer requires it.
+ *
+ * @param id - The identifier of the row to fetch.
+ * @returns The matched row as `{ id }`, or `null` when no row exists.
+ */
 export async function fetchRowById(id: string): Promise<{ id: string } | null> {
   await new Promise((r) => setTimeout(r, RATE_LIMIT_DELAY_MS));
   return { id };
