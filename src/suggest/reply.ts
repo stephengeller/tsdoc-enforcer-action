@@ -8,6 +8,7 @@ import { parseReplyMarker, REPLY_MARKER_PREFIX } from "./review";
 import { DEFAULT_MODEL } from "./generate";
 import { generateTsdocFromReply } from "./generate-from-reply";
 import { spliceTsdocAboveDeclaration } from "./apply-tsdoc";
+import { isReplyThin } from "./thin-reply";
 
 /**
  * Entry point for the `reply` action variant. Triggered by the
@@ -213,13 +214,18 @@ async function run(): Promise<void> {
     });
     const shortSha = (commit.data.commit.sha ?? "").slice(0, 7);
 
+    const ackBody = buildAckBody({
+      symbol: marker.sym,
+      shortSha,
+      replyWasThin: isReplyThin(comment.body),
+    });
     await replyInThread(
       octokit,
       owner,
       repo,
       pr.number,
       comment.id,
-      `Applied TSDoc for \`${marker.sym}\` in \`${shortSha}\`. The next CI run will confirm the check passes — if the \`@remarks\` still doesn't satisfy the predicate I'll ask again.`,
+      ackBody,
     );
     core.info(
       `Committed updated TSDoc for ${marker.sym} at ${marker.path}:${marker.line} (${shortSha}).`,
@@ -241,6 +247,32 @@ async function run(): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     core.setFailed(`tsdoc-enforcer (reply) failed: ${message}`);
   }
+}
+
+/**
+ * Builds the reply body posted after a successful commit-from-reply.
+ *
+ * @remarks
+ * Two variants — a plain "thanks, committed" for substantive replies, and a
+ * gentler variant that acknowledges the commit while inviting the author to
+ * reply again with more context. The split is driven by {@link isReplyThin};
+ * the ack itself is always celebratory so a junior author never feels
+ * blocked by a thin first answer.
+ */
+function buildAckBody(args: {
+  symbol: string;
+  shortSha: string;
+  replyWasThin: boolean;
+}): string {
+  const { symbol, shortSha, replyWasThin } = args;
+  if (!replyWasThin) {
+    return `✅ Committed docs for \`${symbol}\` in \`${shortSha}\`. Thanks!`;
+  }
+  return [
+    `✅ Committed docs for \`${symbol}\` in \`${shortSha}\`.`,
+    "",
+    "The reply was brief so the doc is best-effort — reply again with more context if you'd like me to rewrite it.",
+  ].join("\n");
 }
 
 function isBot(login: string | undefined): boolean {
