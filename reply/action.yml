@@ -1,5 +1,5 @@
-name: "TSDoc Enforcer (Reply)"
-description: "Watches for PR review-comment replies on tsdoc-enforcer threads and commits an author-supplied TSDoc back to the PR branch via Anthropic Claude."
+name: "Doc Scribe (Reply)"
+description: "Watches for PR review-comment replies on Doc Scribe threads and commits an author-supplied TSDoc back to the PR branch via Anthropic Claude."
 author: "stephengeller"
 branding:
   icon: "message-square"

@@ -1,6 +1,6 @@
-# tsdoc-enforcer-action
+# Doc Scribe
 
-A GitHub Action that fails pull requests when TypeScript symbols are missing or have incomplete [TSDoc](https://tsdoc.org), and — on top of structural checks — enforces a *why-shaped* `@remarks` block so reviewers and future maintainers can see the motivation, constraints, and invariants behind each symbol.
+A GitHub Action that flags TypeScript symbols missing TSDoc, asks the author for the _why_ in an inline review comment, then commits a complete TSDoc block when the author replies. The repository slug is still `stephengeller/tsdoc-enforcer-action` — only the user-visible name changed.
 
 Ships three variants from this repo:
 
@@ -37,7 +37,7 @@ All three variants share identical structural + why-capture enforcement rules; t
 ### suggest — Claude-powered inline review (recommended)
 
 ```yaml
-name: TSDoc Enforcer
+name: Doc Scribe
 
 on:
   pull_request:
@@ -65,14 +65,14 @@ Set an `ANTHROPIC_API_KEY` repo secret first. Apply the `why-acknowledged` label
 Pair with the suggest variant. When an author replies to one of its inline comments, Claude turns the reply into a complete TSDoc block and commits it directly to the PR branch.
 
 ```yaml
-name: TSDoc Apply Reply
+name: Doc Scribe Reply
 
 on:
   pull_request_review_comment:
     types: [created]
 
 concurrency:
-  group: tsdoc-reply-${{ github.event.pull_request.number }}
+  group: tsdoc-reply-${{ github.event.comment.in_reply_to_id }}
   cancel-in-progress: false
 
 jobs:
@@ -97,7 +97,7 @@ The handler only reacts to replies on threads it posted (identified by a hidden 
 No Anthropic key required. Posts one PR comment listing every violation with a consolidated prompt you can drop into any AI tool.
 
 ```yaml
-name: TSDoc Enforcer (report)
+name: Doc Scribe (report)
 
 on:
   pull_request:
@@ -176,7 +176,7 @@ The report variant makes zero inference calls and has no Anthropic rate-limit ex
 3. **Route/render** — the suggest variant calls Anthropic Claude per symbol via the `record_why_decision` tool and posts a PR review with inline suggestions or questions; the report variant skips inference and upserts a single PR comment with a consolidated prompt.
 4. **Reply** (`src/suggest/reply.ts`) — triggered by `pull_request_review_comment: [created]`; validates the thread is one of ours via a hidden marker, turns the reply body into a TSDoc block, commits it to the PR head branch, and resolves the thread.
 
-The rule-based why-acceptance predicate is deterministic — Claude authors *candidate* remarks, but the predicate alone decides pass/fail, so the check never flaps between runs on identical code.
+The rule-based why-acceptance predicate is deterministic — Claude authors _candidate_ remarks, but the predicate alone decides pass/fail, so the check never flaps between runs on identical code.
 
 ---
 
