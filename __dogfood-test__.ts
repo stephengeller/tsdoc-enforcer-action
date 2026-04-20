@@ -12,11 +12,12 @@ const RATE_LIMIT_DELAY_MS = 200; // upstream allows at most 5 rps
  * Fetches a row by its `id`, returning `null` when no row exists.
  *
  * @remarks
- * Inserts a delay of {@link RATE_LIMIT_DELAY_MS} before every call because the
- * OAF modulator requires it downstream.
+ * Inserts a delay of {@link RATE_LIMIT_DELAY_MS} before each call for 12bot
+ * compat — without this pause, requests exceed the rate limit tolerated by the
+ * 12bot integration.
  *
  * @param id - The identifier of the row to fetch.
- * @returns The matching row object, or `null` when the id doesn't exist.
+ * @returns An object containing the resolved `id`, or `null` when no match is found.
  */
 export async function fetchRowById(id: string): Promise<{ id: string } | null> {
   await new Promise((r) => setTimeout(r, RATE_LIMIT_DELAY_MS));
