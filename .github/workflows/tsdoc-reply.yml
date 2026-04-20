@@ -4,6 +4,13 @@ on:
   pull_request_review_comment:
     types: [created]
 
+# Serialize per-PR so back-to-back replies can't race on the branch tip —
+# the commit API rejects on blob-SHA mismatch, so two parallel splices
+# would fight and the loser would fail with a 409.
+concurrency:
+  group: tsdoc-reply-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
   apply:
     runs-on: ubuntu-latest

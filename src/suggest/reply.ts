@@ -119,15 +119,21 @@ async function run(): Promise<void> {
       return;
     }
 
-    const headSha = pr.head.sha;
     const headRef = pr.head.ref;
 
+    // Fetch from the branch tip (headRef), not the frozen headSha from the
+    // event payload, so back-to-back replies see each other's commits and
+    // don't splice on top of stale content. The commit API still rejects on
+    // SHA mismatch, but with this fetch the blob SHA matches the tip by
+    // default — races only happen if another commit lands during the Claude
+    // call, which the workflow-level concurrency group in tsdoc-reply.yml
+    // additionally guards against.
     const { content: fileContent, sha: fileSha } = await fetchFileAtRef({
       octokit,
       owner,
       repo,
       path: marker.path,
-      ref: headSha,
+      ref: headRef,
     });
 
     const analysis = findUndocumentedSymbols(
@@ -218,6 +224,19 @@ async function run(): Promise<void> {
     core.info(
       `Committed updated TSDoc for ${marker.sym} at ${marker.path}:${marker.line} (${shortSha}).`,
     );
+
+    // Resolve the thread the reply was on so it falls off the reviewer's
+    // "unresolved" list. Non-fatal — a GraphQL error here shouldn't mask the
+    // successful commit above, so we log and move on. The thread can still be
+    // resolved manually if the mutation failed.
+    await tryResolveThread({
+      githubToken,
+      owner,
+      repo,
+      prNumber: pr.number,
+      parentCommentId: comment.in_reply_to_id,
+      symbolName: marker.sym,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     core.setFailed(`tsdoc-enforcer (reply) failed: ${message}`);
@@ -243,6 +262,110 @@ async function replyInThread(
     comment_id: commentId,
     body,
   });
+}
+
+/**
+ * Marks the review thread that carried the original inline comment as
+ * resolved via the GraphQL `resolveReviewThread` mutation.
+ *
+ * @remarks
+ * The REST comment id (`parentCommentId`) can't feed the mutation directly —
+ * `resolveReviewThread` takes a GraphQL node ID. We paginate the PR's review
+ * threads, match by the first comment's `databaseId`, and mutate on the hit.
+ * Pagination is capped at 10 pages × 100 threads to avoid unbounded calls on
+ * old high-traffic PRs; if the marker comment is beyond that cutoff the
+ * resolution silently no-ops, which is fine because the commit already
+ * landed — thread resolution is presentational, not correctness-critical.
+ */
+async function tryResolveThread(args: {
+  githubToken: string;
+  owner: string;
+  repo: string;
+  prNumber: number;
+  parentCommentId: number;
+  symbolName: string;
+}): Promise<void> {
+  const { githubToken, owner, repo, prNumber, parentCommentId, symbolName } =
+    args;
+  const octokit = github.getOctokit(githubToken);
+
+  try {
+    let cursor: string | null = null;
+    for (let page = 0; page < 10; page++) {
+      const res: ThreadsPage = await octokit.graphql(THREADS_QUERY, {
+        owner,
+        repo,
+        pr: prNumber,
+        cursor,
+      });
+      const threads = res.repository.pullRequest.reviewThreads.nodes;
+      for (const thread of threads) {
+        const first = thread.comments.nodes[0];
+        if (first && first.databaseId === parentCommentId) {
+          if (thread.isResolved) {
+            core.info(
+              `Thread for ${symbolName} already resolved; skipping mutation.`,
+            );
+            return;
+          }
+          await octokit.graphql(RESOLVE_MUTATION, { threadId: thread.id });
+          core.info(`Resolved review thread for ${symbolName}.`);
+          return;
+        }
+      }
+      const pageInfo = res.repository.pullRequest.reviewThreads.pageInfo;
+      if (!pageInfo.hasNextPage) break;
+      cursor = pageInfo.endCursor;
+    }
+    core.info(
+      `No review thread matched parent comment ${parentCommentId} for ${symbolName}; leaving thread state unchanged.`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    core.warning(
+      `Failed to resolve review thread for ${symbolName}: ${message}`,
+    );
+  }
+}
+
+const THREADS_QUERY = `
+  query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        reviewThreads(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            isResolved
+            comments(first: 1) { nodes { databaseId } }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const RESOLVE_MUTATION = `
+  mutation($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread { isResolved }
+    }
+  }
+`;
+
+interface ThreadsPage {
+  repository: {
+    pullRequest: {
+      reviewThreads: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        nodes: Array<{
+          id: string;
+          isResolved: boolean;
+          comments: { nodes: Array<{ databaseId: number }> };
+        }>;
+      };
+    };
+  };
 }
 
 interface ReviewComment {
