@@ -1,4 +1,4 @@
-name: TSDoc Enforcer (self-dogfood)
+name: Doc Scribe (self-dogfood)
 
 on:
   pull_request:

@@ -48,9 +48,7 @@ async function run(): Promise<void> {
       return;
     }
     if (context.payload.action !== "created") {
-      core.info(
-        `Skipping: action is ${context.payload.action}, not created`,
-      );
+      core.info(`Skipping: action is ${context.payload.action}, not created`);
       return;
     }
 
@@ -83,14 +81,14 @@ async function run(): Promise<void> {
     });
     if (!isBot(parent.data.user?.login)) {
       core.info(
-        `Skipping: parent comment author ${parent.data.user?.login ?? "?"} is not a bot — not a tsdoc-enforcer thread.`,
+        `Skipping: parent comment author ${parent.data.user?.login ?? "?"} is not a bot — not a Doc Scribe thread.`,
       );
       return;
     }
     const parentBody = parent.data.body ?? "";
     if (!parentBody.includes(REPLY_MARKER_PREFIX)) {
       core.info(
-        "Skipping: parent comment is missing the tsdoc-enforcer marker — not our thread.",
+        "Skipping: parent comment is missing the Doc Scribe marker — not our thread.",
       );
       return;
     }
@@ -196,7 +194,7 @@ async function run(): Promise<void> {
       fileSha,
       targetLine: target.line,
       tsdoc,
-      message: `docs(${marker.sym}): apply TSDoc from PR reply\n\nAuthored via tsdoc-enforcer reply flow. The author's reply on the\nreview thread explained the why; this commit splices the generated\nTSDoc block above the declaration.`,
+      message: `docs(${marker.sym}): apply TSDoc from PR reply\n\nAuthored via Doc Scribe reply flow. The author's reply on the\nreview thread explained the why; this commit splices the generated\nTSDoc block above the declaration.`,
     });
 
     if (commitResult.noop) {
@@ -218,14 +216,7 @@ async function run(): Promise<void> {
       shortSha,
       replyWasThin: isReplyThin(comment.body),
     });
-    await replyInThread(
-      octokit,
-      owner,
-      repo,
-      pr.number,
-      comment.id,
-      ackBody,
-    );
+    await replyInThread(octokit, owner, repo, pr.number, comment.id, ackBody);
     core.info(
       `Committed updated TSDoc for ${marker.sym} at ${marker.path}:${marker.line} (${shortSha}).`,
     );
@@ -244,7 +235,7 @@ async function run(): Promise<void> {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    core.setFailed(`tsdoc-enforcer (reply) failed: ${message}`);
+    core.setFailed(`doc-scribe (reply) failed: ${message}`);
   }
 }
 

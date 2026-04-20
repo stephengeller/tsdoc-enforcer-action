@@ -1,4 +1,4 @@
-name: TSDoc Enforcer (reply-to-apply)
+name: Doc Scribe (reply-to-apply)
 
 on:
   pull_request_review_comment:
