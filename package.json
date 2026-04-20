@@ -7,7 +7,8 @@
   "scripts": {
     "build": "ncc build src/suggest/index.ts -o dist --license licenses.txt",
     "build:report": "ncc build src/report/index.ts -o report/dist --license licenses.txt",
-    "build:all": "npm run build && npm run build:report",
+    "build:reply": "ncc build src/suggest/reply.ts -o reply/dist --license licenses.txt",
+    "build:all": "npm run build && npm run build:report && npm run build:reply",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
     "all": "npm run typecheck && npm run build"

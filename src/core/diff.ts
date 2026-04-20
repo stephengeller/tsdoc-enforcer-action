@@ -49,7 +49,7 @@ export async function getChangedTypeScriptFiles(args: {
   const results: ChangedFile[] = [];
   for (const file of candidates) {
     try {
-      const content = await fetchFileAtRef({
+      const { content } = await fetchFileAtRef({
         octokit,
         owner,
         repo,
@@ -68,13 +68,13 @@ export async function getChangedTypeScriptFiles(args: {
   return results;
 }
 
-async function fetchFileAtRef(args: {
+export async function fetchFileAtRef(args: {
   octokit: ReturnType<typeof github.getOctokit>;
   owner: string;
   repo: string;
   path: string;
   ref: string;
-}): Promise<string> {
+}): Promise<{ content: string; sha: string }> {
   const { octokit, owner, repo, path, ref } = args;
   const res = await octokit.rest.repos.getContent({ owner, repo, path, ref });
 
@@ -85,5 +85,8 @@ async function fetchFileAtRef(args: {
   }
 
   const encoded = res.data.content;
-  return Buffer.from(encoded, "base64").toString("utf8");
+  return {
+    content: Buffer.from(encoded, "base64").toString("utf8"),
+    sha: res.data.sha,
+  };
 }

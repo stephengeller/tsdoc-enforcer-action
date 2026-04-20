@@ -54,7 +54,7 @@ export async function postReviewWithDecisions(args: {
     path: d.violation.file,
     line: d.violation.line,
     side: "RIGHT" as const,
-    body: buildCommentBody(d),
+    body: `${buildCommentBody(d)}\n\n${buildReplyMarker(d.violation)}`,
   }));
 
   if (inlineComments.length === 0) {
@@ -118,7 +118,7 @@ function buildSuggestBody(d: DecidedViolation): string {
     `${indentedDoc}\n${d.violation.originalLine}`,
     "```",
     "",
-    `_Confidence: ${d.decision.confidence.toFixed(2)}._`,
+    `_Confidence: ${d.decision.confidence.toFixed(2)}. Or reply to this comment with the real why and I'll regenerate the TSDoc and commit it for you._`,
   ].join("\n");
 }
 
@@ -134,6 +134,8 @@ function buildAskBody(d: DecidedViolation): string {
     "The why isn't inferable from the source — no nearby constants, error messages, or tests pin down the motivation. Please add a `@remarks` block to the TSDoc that answers the questions below. The check passes once your `@remarks` clears the acceptance predicate (≥15 words, contains a causal keyword / number-with-unit / `{@link}`).",
     "",
     questionList,
+    "",
+    "_Or just reply to this comment with the why — I'll generate and commit the TSDoc for you._",
   ].join("\n");
 }
 
@@ -245,4 +247,61 @@ async function postFallbackIssueComment(
     issue_number: prNumber,
     body,
   });
+}
+
+/**
+ * Hidden-comment marker stamped on every inline review comment this action
+ * posts. The reply handler keys off this prefix to decide whether a reply
+ * belongs to one of our threads — any other prefix means "not ours, ignore."
+ */
+export const REPLY_MARKER_PREFIX = "<!-- tsdoc-enforcer-suggest:v1 ";
+
+/**
+ * Encodes a violation into a hidden HTML comment that the reply handler
+ * parses to locate the symbol. Using JSON keeps the parser trivial and
+ * survives path characters that would need escaping in a freer format.
+ */
+function buildReplyMarker(v: {
+  file: string;
+  line: number;
+  symbolName: string;
+}): string {
+  const payload = JSON.stringify({
+    path: v.file,
+    line: v.line,
+    sym: v.symbolName,
+  });
+  return `${REPLY_MARKER_PREFIX}${payload} -->`;
+}
+
+/**
+ * Parses the marker out of a parent comment body. Returns `undefined` when
+ * the prefix is absent, the JSON is malformed, or required fields are
+ * missing — the reply handler treats any of those as "not our thread."
+ */
+export function parseReplyMarker(
+  body: string,
+): { path: string; line: number; sym: string } | undefined {
+  const start = body.indexOf(REPLY_MARKER_PREFIX);
+  if (start < 0) return undefined;
+  const jsonStart = start + REPLY_MARKER_PREFIX.length;
+  const end = body.indexOf(" -->", jsonStart);
+  if (end < 0) return undefined;
+  const raw = body.slice(jsonStart, end).trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const p = parsed as Record<string, unknown>;
+  if (
+    typeof p.path !== "string" ||
+    typeof p.line !== "number" ||
+    typeof p.sym !== "string"
+  ) {
+    return undefined;
+  }
+  return { path: p.path, line: p.line, sym: p.sym };
 }

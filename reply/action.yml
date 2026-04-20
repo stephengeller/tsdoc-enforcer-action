@@ -1,0 +1,26 @@
+name: "TSDoc Enforcer (Reply)"
+description: "Watches for PR review-comment replies on tsdoc-enforcer threads and commits an author-supplied TSDoc back to the PR branch via Anthropic Claude."
+author: "stephengeller"
+branding:
+  icon: "message-square"
+  color: "purple"
+
+# Consumer workflow must grant:
+#   permissions.contents: write       (to commit the generated TSDoc)
+#   permissions.pull-requests: write  (to post the threaded ack reply)
+# GITHUB_TOKEN is provided automatically by GitHub. ANTHROPIC_API_KEY must
+# be supplied as a secret and passed in via the `anthropic-api-key` input.
+# Trigger this action on `pull_request_review_comment: [created]`.
+
+inputs:
+  anthropic-api-key:
+    description: "Anthropic API key used to call Claude when turning an author's reply into a TSDoc block. Required. Pass via a workflow secret."
+    required: true
+  anthropic-model:
+    description: "Claude model ID. Defaults to `claude-sonnet-4-6` — same sweet spot the suggest variant uses."
+    required: false
+    default: "claude-sonnet-4-6"
+
+runs:
+  using: "node20"
+  main: "dist/index.js"

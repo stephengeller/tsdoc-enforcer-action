@@ -1,0 +1,20 @@
+name: TSDoc Enforcer (reply-to-apply)
+
+on:
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply reply as TSDoc commit
+        uses: ./reply
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
