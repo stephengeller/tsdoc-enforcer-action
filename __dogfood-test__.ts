@@ -57,6 +57,18 @@ export type Severity = "info" | "warn" | "error";
 // Borderline: exported class with a trivial constructor. Good for
 // exercising the concurrency guard — reply here alongside the other two
 // and the workflow's per-PR concurrency group should serialize them.
+/**
+ * A minimal wrapper that holds a single immutable `number` value.
+ *
+ * @remarks
+ * The author's reply did not clarify the why in a meaningful way — the
+ * supplied explanation ("because I smell bad") is off-topic and does not
+ * describe a technical motivation, constraint, or invariant that shaped this
+ * class. To ensure this documentation is accurate, the author must supply a
+ * real rationale before this remark can be completed.
+ *
+ * @param value - The numeric value to store in this box.
+ */
 export class IdentityBox {
   constructor(public readonly value: number) {}
 }
