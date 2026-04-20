@@ -8,6 +8,7 @@ import { parseReplyMarker, REPLY_MARKER_PREFIX } from "./review";
 import { DEFAULT_MODEL } from "./generate";
 import { generateTsdocFromReply } from "./generate-from-reply";
 import { spliceTsdocAboveDeclaration } from "./apply-tsdoc";
+import { isReplyThin } from "./thin-reply";
 
 /**
  * Entry point for the `reply` action variant. Triggered by the
@@ -184,13 +185,21 @@ async function run(): Promise<void> {
       replyBody: comment.body ?? "",
     });
 
-    const updated = spliceTsdocAboveDeclaration({
-      source: fileContent,
-      declarationLine: target.line,
+    const commitResult = await commitWithShaRetry({
+      octokit,
+      owner,
+      repo,
+      path: marker.path,
+      branch: headRef,
+      symbolName: marker.sym,
+      fileContent,
+      fileSha,
+      targetLine: target.line,
       tsdoc,
+      message: `docs(${marker.sym}): apply TSDoc from PR reply\n\nAuthored via tsdoc-enforcer reply flow. The author's reply on the\nreview thread explained the why; this commit splices the generated\nTSDoc block above the declaration.`,
     });
 
-    if (updated === fileContent) {
+    if (commitResult.noop) {
       await replyInThread(
         octokit,
         owner,
@@ -202,24 +211,20 @@ async function run(): Promise<void> {
       return;
     }
 
-    const commit = await octokit.rest.repos.createOrUpdateFileContents({
-      owner,
-      repo,
-      path: marker.path,
-      branch: headRef,
-      message: `docs(${marker.sym}): apply TSDoc from PR reply\n\nAuthored via tsdoc-enforcer reply flow. The author's reply on the\nreview thread explained the why; this commit splices the generated\nTSDoc block above the declaration.`,
-      content: Buffer.from(updated, "utf8").toString("base64"),
-      sha: fileSha,
-    });
-    const shortSha = (commit.data.commit.sha ?? "").slice(0, 7);
+    const shortSha = commitResult.shortSha;
 
+    const ackBody = buildAckBody({
+      symbol: marker.sym,
+      shortSha,
+      replyWasThin: isReplyThin(comment.body),
+    });
     await replyInThread(
       octokit,
       owner,
       repo,
       pr.number,
       comment.id,
-      `Applied TSDoc for \`${marker.sym}\` in \`${shortSha}\`. The next CI run will confirm the check passes — if the \`@remarks\` still doesn't satisfy the predicate I'll ask again.`,
+      ackBody,
     );
     core.info(
       `Committed updated TSDoc for ${marker.sym} at ${marker.path}:${marker.line} (${shortSha}).`,
@@ -241,6 +246,179 @@ async function run(): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     core.setFailed(`tsdoc-enforcer (reply) failed: ${message}`);
   }
+}
+
+type CommitWithShaRetryResult =
+  | { noop: true }
+  | { noop: false; shortSha: string };
+
+/**
+ * Maximum commit attempts before bubbling the SHA-mismatch error up.
+ *
+ * @remarks
+ * Three is enough for the realistic race — two concurrent commits to the
+ * same file, where the loser re-fetches and tries again. A third spin
+ * would only fire if a *third* commit raced in during the retry, which
+ * in practice doesn't happen (reply fan-out is driven by humans at
+ * human-typing speed).
+ */
+const MAX_COMMIT_ATTEMPTS = 3;
+
+/**
+ * Commits an updated TSDoc splice, retrying on the 409 that GitHub returns
+ * when the file's blob SHA has moved out from under us.
+ *
+ * @remarks
+ * The concurrency group on `tsdoc-reply.yml` now keys per-thread, so two
+ * replies on *different* threads can run in parallel — both landing splices
+ * on the same file and racing on the branch tip. The GitHub commit API
+ * refuses the loser with a 409 containing `does not match`, so the loser
+ * re-fetches the file (picking up the winner's commit), re-locates the
+ * symbol (which may have shifted down because TSDoc was spliced above
+ * another symbol earlier in the file), re-splices, and retries. Bounded
+ * by {@link MAX_COMMIT_ATTEMPTS}; any non-409 error, or the final 409,
+ * is rethrown so the caller fails visibly rather than silently.
+ *
+ * @returns `{ noop: true }` when the re-spliced content is identical to
+ *   the fetched file (another run already landed the same change);
+ *   otherwise `{ noop: false, shortSha }` with the committed short SHA.
+ */
+async function commitWithShaRetry(args: {
+  octokit: ReturnType<typeof github.getOctokit>;
+  owner: string;
+  repo: string;
+  path: string;
+  branch: string;
+  symbolName: string;
+  fileContent: string;
+  fileSha: string;
+  targetLine: number;
+  tsdoc: string;
+  message: string;
+}): Promise<CommitWithShaRetryResult> {
+  let { fileContent, fileSha, targetLine } = args;
+
+  for (let attempt = 1; attempt <= MAX_COMMIT_ATTEMPTS; attempt++) {
+    const updated = spliceTsdocAboveDeclaration({
+      source: fileContent,
+      declarationLine: targetLine,
+      tsdoc: args.tsdoc,
+    });
+
+    if (updated === fileContent) {
+      return { noop: true };
+    }
+
+    try {
+      const commit = await args.octokit.rest.repos.createOrUpdateFileContents({
+        owner: args.owner,
+        repo: args.repo,
+        path: args.path,
+        branch: args.branch,
+        message: args.message,
+        content: Buffer.from(updated, "utf8").toString("base64"),
+        sha: fileSha,
+      });
+      return {
+        noop: false,
+        shortSha: (commit.data.commit.sha ?? "").slice(0, 7),
+      };
+    } catch (err) {
+      if (!isShaMismatch(err) || attempt === MAX_COMMIT_ATTEMPTS) {
+        throw err;
+      }
+      core.info(
+        `Commit attempt ${attempt} for ${args.symbolName} hit SHA mismatch; ` +
+          `re-fetching ${args.path} and retrying.`,
+      );
+      const refreshed = await fetchFileAtRef({
+        octokit: args.octokit,
+        owner: args.owner,
+        repo: args.repo,
+        path: args.path,
+        ref: args.branch,
+      });
+      fileContent = refreshed.content;
+      fileSha = refreshed.sha;
+      targetLine = relocateSymbol(fileContent, args.symbolName, targetLine);
+    }
+  }
+
+  throw new Error(
+    `commitWithShaRetry fell out of its retry loop for ${args.symbolName} — this is unreachable unless MAX_COMMIT_ATTEMPTS is 0.`,
+  );
+}
+
+/**
+ * Recognizes the 409 response the GitHub commit API returns when the
+ * supplied blob `sha` doesn't match the file's current SHA.
+ *
+ * @remarks
+ * Checks both status code and message because GitHub's error payload
+ * sometimes surfaces as a REST wrapper and sometimes as a generic fetch
+ * error, depending on the transport. The message match is a defensive
+ * belt-and-braces guard — 409 alone is specific enough in practice.
+ */
+function isShaMismatch(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (status !== 409) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("does not match") ||
+    message.includes("is at") ||
+    message.includes("sha")
+  );
+}
+
+/**
+ * Re-finds the declaration line for `symbolName` after a retry-triggered
+ * re-fetch. Falls back to the original line if the symbol is no longer
+ * flagged (e.g. another run already committed docs for it); the caller's
+ * subsequent splice will then produce a no-op and short-circuit.
+ */
+function relocateSymbol(
+  fileContent: string,
+  symbolName: string,
+  previousLine: number,
+): number {
+  const analysis = findUndocumentedSymbols(
+    [{ path: "(retry)", content: fileContent }],
+    DEFAULT_WHY_RULES_CONFIG,
+  );
+  const byName = analysis.filter((v) => v.symbolName === symbolName);
+  if (byName.length === 0) return previousLine;
+  if (byName.length === 1) return byName[0].line;
+  return byName.reduce((best, v) =>
+    Math.abs(v.line - previousLine) < Math.abs(best.line - previousLine)
+      ? v
+      : best,
+  ).line;
+}
+
+/**
+ * Builds the reply body posted after a successful commit-from-reply.
+ *
+ * @remarks
+ * Two variants — a plain "thanks, committed" for substantive replies, and a
+ * gentler variant that acknowledges the commit while inviting the author to
+ * reply again with more context. The split is driven by {@link isReplyThin};
+ * the ack itself is always celebratory so a junior author never feels
+ * blocked by a thin first answer.
+ */
+function buildAckBody(args: {
+  symbol: string;
+  shortSha: string;
+  replyWasThin: boolean;
+}): string {
+  const { symbol, shortSha, replyWasThin } = args;
+  if (!replyWasThin) {
+    return `✅ Committed docs for \`${symbol}\` in \`${shortSha}\`. Thanks!`;
+  }
+  return [
+    `✅ Committed docs for \`${symbol}\` in \`${shortSha}\`.`,
+    "",
+    "The reply was brief so the doc is best-effort — reply again with more context if you'd like me to rewrite it.",
+  ].join("\n");
 }
 
 function isBot(login: string | undefined): boolean {

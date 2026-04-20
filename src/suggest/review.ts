@@ -109,82 +109,81 @@ function buildSuggestBody(d: DecidedViolation): string {
     .map((l) => (l.length === 0 ? "" : `${indent}${l}`))
     .join("\n");
 
-  return [
-    `**Suggested TSDoc for \`${d.violation.symbolName}\`** (${d.violation.kind}) — ${whyChip(d.violation)}.`,
+  const lines: string[] = [
+    `💬 **Reply with the "why" for \`${d.violation.symbolName}\`** — I'll write the docs.`,
+  ];
+
+  const examples = d.decision.whyExamples;
+  if (examples && examples.length > 0) {
+    lines.push(
+      "",
+      '<details><summary>Examples of a good "why" reply</summary>',
+      "",
+      ...examples.map((ex) => `- *${ex}*`),
+      "",
+      "</details>",
+    );
+  }
+
+  lines.push(
     "",
-    "Either click **Apply suggestion** to insert this generated block, or write your own. Either approach satisfies the check as long as the `@remarks` captures the why.",
+    "<details><summary>Or, use my draft</summary>",
     "",
     "```suggestion",
     `${indentedDoc}\n${d.violation.originalLine}`,
     "```",
     "",
-    `_Confidence: ${d.decision.confidence.toFixed(2)}. Or reply to this comment with the real why and I'll regenerate the TSDoc and commit it for you._`,
-  ].join("\n");
+    "</details>",
+  );
+
+  return lines.join("\n");
 }
 
 function buildAskBody(d: DecidedViolation): string {
   if (d.decision.action !== "ask") {
     throw new Error("buildAskBody requires ask decision");
   }
-  const questionList = d.decision.questions.map((q) => `- ${q}`).join("\n");
 
-  return [
-    `**Why is missing for \`${d.violation.symbolName}\`** (${d.violation.kind}) — ${whyChip(d.violation)}.`,
-    "",
-    "The why isn't inferable from the source — no nearby constants, error messages, or tests pin down the motivation. Please add a `@remarks` block to the TSDoc that answers the questions below. The check passes once your `@remarks` clears the acceptance predicate (≥15 words, contains a causal keyword / number-with-unit / `{@link}`).",
-    "",
-    questionList,
-    "",
-    "_Or just reply to this comment with the why — I'll generate and commit the TSDoc for you._",
-  ].join("\n");
-}
-
-function buildSummaryBody(decided: DecidedViolation[]): string {
-  const suggestN = countByAction(decided, "suggest");
-  const askN = countByAction(decided, "ask");
-  const skipN = countByAction(decided, "skip");
-
-  const headerCounts = [
-    suggestN > 0 ? `**${suggestN}** with paste-ready suggestions` : null,
-    askN > 0 ? `**${askN}** awaiting your answers` : null,
-    skipN > 0 ? `**${skipN}** marked trivial by AI` : null,
-  ]
-    .filter((s): s is string => s !== null)
-    .join(", ");
-
-  const lines = [
-    `🚨 TSDoc / why-capture missing for ${decided.length} symbol(s) — ${headerCounts}.`,
-    "",
-    "For each inline comment below: apply the suggestion, or write your own TSDoc. The check passes once every flagged symbol has structurally complete TSDoc and a `@remarks` that captures the **why** (motivation / constraints / invariants).",
+  const lines: string[] = [
+    `💬 **Reply with the "why" for \`${d.violation.symbolName}\`** — I'll write the docs.`,
   ];
 
-  if (skipN > 0) {
+  const examples = d.decision.whyExamples;
+  if (examples && examples.length > 0) {
     lines.push(
       "",
-      "_The following symbols were skipped by the AI as trivial; they remain in the violation set until you either document them or apply the bypass label:_",
+      '<details><summary>Examples of a good "why" reply</summary>',
       "",
-      ...decided
-        .filter((d) => d.decision.action === "skip")
-        .map(
-          (d) =>
-            `- \`${d.violation.file}:${d.violation.line}\` — \`${d.violation.symbolName}\``,
-        ),
+      ...examples.map((ex) => `- *${ex}*`),
+      "",
+      "</details>",
     );
   }
 
   return lines.join("\n");
 }
 
-function whyChip(v: Violation): string {
-  const parts: string[] = [];
-  if (v.structuralIncomplete) parts.push("structural TSDoc incomplete");
-  if (v.whyStatus === "missing") parts.push("`@remarks` missing");
-  else if (v.whyStatus === "weak") {
-    parts.push(
-      `weak \`@remarks\`${v.whyFailureReason ? ` (${v.whyFailureReason})` : ""}`,
+function buildSummaryBody(decided: DecidedViolation[]): string {
+  const postable = decided.filter((d) => d.decision.action !== "skip");
+  const n = postable.length;
+  const lines = [
+    `📝 **${n} symbol(s) need a quick "why".** Reply to each inline comment with a sentence on why the code exists — I'll write the docs for you.`,
+  ];
+
+  const skipped = decided.filter((d) => d.decision.action === "skip");
+  if (skipped.length > 0) {
+    lines.push(
+      "",
+      `_${skipped.length} symbol(s) skipped as trivial by the AI; they remain flagged until documented or bypassed:_`,
+      "",
+      ...skipped.map(
+        (d) =>
+          `- \`${d.violation.file}:${d.violation.line}\` — \`${d.violation.symbolName}\``,
+      ),
     );
   }
-  return parts.join(", ");
+
+  return lines.join("\n");
 }
 
 function countByAction(
@@ -211,32 +210,21 @@ async function postFallbackIssueComment(
   prNumber: number,
   decided: DecidedViolation[],
 ): Promise<void> {
-  const sections = decided
-    .filter((d) => d.decision.action !== "skip")
+  const postable = decided.filter((d) => d.decision.action !== "skip");
+  const sections = postable
     .map((d) => {
-      const header = `### \`${d.violation.file}:${d.violation.line}\` — \`${d.violation.symbolName}\` (${d.violation.kind})`;
-      if (d.decision.action === "suggest") {
-        return [header, "", "```typescript", d.decision.tsdocFull, "```"].join(
-          "\n",
-        );
-      }
-      if (d.decision.action === "ask") {
-        return [
-          header,
-          "",
-          "_The why isn't inferable from the source. Please answer in a `@remarks` block:_",
-          "",
-          ...d.decision.questions.map((q) => `- ${q}`),
-        ].join("\n");
-      }
-      return "";
+      const header = `### \`${d.violation.file}:${d.violation.line}\` — \`${d.violation.symbolName}\``;
+      return [
+        header,
+        "",
+        `💬 Reply with the "why" — I'll write the docs.`,
+      ].join("\n");
     })
-    .filter(Boolean)
     .join("\n\n");
 
   const body = [
     "<!-- tsdoc-enforcer-fallback -->",
-    `🚨 TSDoc / why-capture missing for ${decided.length} symbol(s). Inline-suggestion posting failed — see the per-symbol guidance below.`,
+    `📝 **${postable.length} symbol(s) need a quick "why".** (Inline posting failed — per-symbol guidance below.)`,
     "",
     sections,
   ].join("\n");

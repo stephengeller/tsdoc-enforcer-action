@@ -40,12 +40,14 @@ export type WhyDecision =
       remarksDraft: string;
       confidence: number;
       rationale: string;
+      whyExamples?: string[];
     }
   | {
       action: "ask";
       questions: string[];
       confidence: number;
       rationale: string;
+      whyExamples?: string[];
     }
   | {
       action: "skip";
@@ -57,7 +59,7 @@ export type WhyDecision =
 const WHY_DECISION_TOOL: Anthropic.Tool = {
   name: "record_why_decision",
   description:
-    "Record your decision for this symbol: suggest a TSDoc with @remarks, ask the author specific questions, or skip if the symbol is genuinely trivial.",
+    "Record your decision for this symbol: suggest a complete TSDoc draft, ask the author to reply with the why, or skip if trivial. When action is 'suggest' or 'ask', provide `whyExamples` — two short plain-English sentences modelling what a good why reply looks like for this symbol.",
   input_schema: {
     type: "object",
     properties: {
@@ -81,7 +83,13 @@ const WHY_DECISION_TOOL: Anthropic.Tool = {
         type: "array",
         items: { type: "string" },
         description:
-          "3–5 specific questions a senior reviewer would ask the author about this symbol. Required when action='ask'.",
+          "(Optional, ask branch only.) 2-3 specific questions a senior reviewer might ask. Logged internally for diagnostics; not shown to the author. Leave empty if you have nothing useful.",
+      },
+      whyExamples: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "EXACTLY TWO short (10-20 word), plain-English examples of what a good 'why' reply from the author might look like for THIS specific symbol — grounded in the source you can see (named constants, nearby error messages, call sites). First person, one sentence each, no TSDoc syntax. These are shown to the author in a collapsed block as inspiration, not as the answer. Required for action='suggest' and action='ask'. Omit for action='skip'.",
       },
       reason: {
         type: "string",
@@ -220,23 +228,22 @@ function parseDecision(
       remarksDraft,
       confidence,
       rationale: stringField(input, "rationale") ?? "",
+      whyExamples: stringArrayField(input, "whyExamples"),
     };
   }
 
   if (action === "ask") {
+    // Questions are kept for internal logging only — the author-facing
+    // comment no longer renders them, so an empty list is acceptable.
     const questions = Array.isArray(input.questions)
       ? input.questions.filter((q): q is string => typeof q === "string")
       : [];
-    if (questions.length === 0) {
-      throw new Error(
-        `Claude action=ask for ${symbolName} returned no questions.`,
-      );
-    }
     return {
       action: "ask",
       questions,
       confidence,
       rationale: stringField(input, "rationale") ?? "",
+      whyExamples: stringArrayField(input, "whyExamples"),
     };
   }
 
@@ -291,6 +298,16 @@ function stringField(
 ): string | undefined {
   const v = o[key];
   return typeof v === "string" ? v : undefined;
+}
+
+function stringArrayField(
+  o: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
+  const v = o[key];
+  if (!Array.isArray(v)) return undefined;
+  const filtered = v.filter((item): item is string => typeof item === "string");
+  return filtered.length > 0 ? filtered : undefined;
 }
 
 function truncate(s: string, max: number): string {

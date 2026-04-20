@@ -4,11 +4,16 @@ on:
   pull_request_review_comment:
     types: [created]
 
-# Serialize per-PR so back-to-back replies can't race on the branch tip —
-# the commit API rejects on blob-SHA mismatch, so two parallel splices
-# would fight and the loser would fail with a 409.
+# Serialize per-thread (parent review comment) rather than per-PR — GitHub
+# only keeps one waiting run per concurrency group, so a per-PR key silently
+# drops middle replies when 3+ arrive in quick succession. Cross-thread
+# commits to the same file can still 409 on blob-SHA mismatch; the reply
+# action retries on that (see commitWithRetry in src/suggest/reply.ts).
+# Note: github.event.comment.in_reply_to_id is a GitHub-assigned numeric id
+# used only as a group key (not interpolated into any shell command), so the
+# standard workflow-injection risks for comment fields don't apply here.
 concurrency:
-  group: tsdoc-reply-${{ github.event.pull_request.number }}
+  group: tsdoc-reply-${{ github.event.comment.in_reply_to_id }}
   cancel-in-progress: false
 
 jobs:
