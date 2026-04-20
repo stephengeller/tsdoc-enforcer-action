@@ -26,6 +26,17 @@ export async function fetchRowById(id: string): Promise<{ id: string } | null> {
 // `ask` case: no why-signals visible. Claude should ask 3–5 targeted
 // questions; replying to that comment should turn the answer into TSDoc
 // via the reply handler.
+/**
+ * Normalises a domain string by trimming whitespace and converting it to lowercase.
+ *
+ * @remarks
+ * Both `trim` and `toLowerCase` are required because domain comparison logic must
+ * perform case-insensitive matching against records stored in lowercase in the database;
+ * without this normalisation, lookups against those records would silently fail.
+ *
+ * @param input - The raw domain string to normalise.
+ * @returns The trimmed, lowercased domain string.
+ */
 export function applyDomainPolicy(input: string): string {
   return input.trim().toLowerCase();
 }
