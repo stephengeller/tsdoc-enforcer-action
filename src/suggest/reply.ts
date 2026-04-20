@@ -134,9 +134,21 @@ async function run(): Promise<void> {
       [{ path: marker.path, content: fileContent }],
       DEFAULT_WHY_RULES_CONFIG,
     );
-    const target = analysis.find(
-      (v) => v.symbolName === marker.sym && v.line === marker.line,
-    );
+    // Match by symbol name — the marker's `line` is frozen at posting time,
+    // but earlier reply-to-apply commits in the same PR splice TSDoc above
+    // other symbols and shift this one downward. `line` is only a tiebreaker
+    // for overloaded / same-named symbols within one file.
+    const byName = analysis.filter((v) => v.symbolName === marker.sym);
+    const target =
+      byName.length === 0
+        ? undefined
+        : byName.length === 1
+          ? byName[0]
+          : byName.reduce((best, v) =>
+              Math.abs(v.line - marker.line) < Math.abs(best.line - marker.line)
+                ? v
+                : best,
+            );
 
     if (!target) {
       await replyInThread(
@@ -145,10 +157,10 @@ async function run(): Promise<void> {
         repo,
         pr.number,
         comment.id,
-        `\`${marker.sym}\` is no longer flagged at \`${marker.path}:${marker.line}\` — either you already fixed it or the symbol moved. Re-trigger by pushing a new commit.`,
+        `\`${marker.sym}\` is no longer flagged in \`${marker.path}\` — either you already fixed it or the symbol was renamed/removed.`,
       );
       core.info(
-        `Skipping: symbol ${marker.sym} at ${marker.path}:${marker.line} is not in the current violation set.`,
+        `Skipping: symbol ${marker.sym} is not in the current violation set for ${marker.path}.`,
       );
       return;
     }
