@@ -139,10 +139,9 @@ async function run(): Promise<void> {
     const skipN = decided.filter((d) => d.decision.action === "skip").length;
 
     core.setFailed(
-      `tsdoc-enforcer (suggest): ${decided.length} symbol(s) need attention ` +
-        `(${suggestN} suggested, ${askN} asked, ${skipN} skipped). ` +
-        `Apply suggestions or answer questions inline; the check passes once ` +
-        `every flagged symbol has structurally complete TSDoc and an acceptable \`@remarks\`.`,
+      `tsdoc-enforcer (suggest): ${decided.length} symbol(s) need a why from the author ` +
+        `(${suggestN} with drafts, ${askN} awaiting a reply, ${skipN} skipped). ` +
+        `Authors can reply to any inline comment and the bot will commit the docs.`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -220,11 +219,11 @@ async function postOversizedComment(args: {
 
   const body = [
     "<!-- tsdoc-enforcer-oversized -->",
-    `🚨 **PR too large for AI why-inference**`,
+    `📝 **${violations.length} symbol(s) need a "why"** — that's more than the AI cap of ${maxSymbolsForAi}, so I'm not auto-drafting inline comments for this PR.`,
     "",
-    `${violations.length} symbols flagged, but the action is configured to AI-process at most ${maxSymbolsForAi} per PR. Either:`,
+    "Two options:",
     "",
-    `1. Add structurally complete TSDoc with a why-shaped \`@remarks\` to each flagged symbol manually, OR`,
+    "1. Document each symbol yourself (a TSDoc block explaining why it exists), OR",
     `2. Apply the \`${bypassLabel}\` label to acknowledge the PR is too large/mechanical to document per-symbol.`,
     "",
     "Flagged symbols:",
