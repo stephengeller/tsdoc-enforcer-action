@@ -1,4 +1,4 @@
-name: "TSDoc Enforcer (Report)"
+name: "Doc Scribe (Report)"
 description: "Fails PRs that add TypeScript symbols without TSDoc or without a why-shaped @remarks. Posts a PR comment with per-symbol reasons, a templated remarks skeleton, and a paste-ready AI prompt."
 author: "stephengeller"
 branding:

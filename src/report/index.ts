@@ -82,12 +82,12 @@ async function run(): Promise<void> {
     }
 
     core.setFailed(
-      `tsdoc-enforcer (report): ${violations.length} symbol(s) need attention. ` +
+      `doc-scribe (report): ${violations.length} symbol(s) need attention. ` +
         `See PR comment for the per-symbol checklist and paste-ready prompt.`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    core.setFailed(`tsdoc-enforcer (report) failed: ${message}`);
+    core.setFailed(`doc-scribe (report) failed: ${message}`);
   }
 }
 

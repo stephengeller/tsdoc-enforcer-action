@@ -111,7 +111,7 @@ async function run(): Promise<void> {
         bypassLabel,
       });
       core.setFailed(
-        `tsdoc-enforcer (suggest): ${violations.length} symbol(s) exceeds the ` +
+        `doc-scribe (suggest): ${violations.length} symbol(s) exceeds the ` +
           `${maxSymbolsForAi}-symbol AI cap. PR is too large for per-symbol ` +
           `why-inference; document manually or apply \`${bypassLabel}\`.`,
       );
@@ -139,13 +139,13 @@ async function run(): Promise<void> {
     const skipN = decided.filter((d) => d.decision.action === "skip").length;
 
     core.setFailed(
-      `tsdoc-enforcer (suggest): ${decided.length} symbol(s) need a why from the author ` +
+      `doc-scribe (suggest): ${decided.length} symbol(s) need a why from the author ` +
         `(${suggestN} with drafts, ${askN} awaiting a reply, ${skipN} skipped). ` +
         `Authors can reply to any inline comment and the bot will commit the docs.`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    core.setFailed(`tsdoc-enforcer (suggest) failed: ${message}`);
+    core.setFailed(`doc-scribe (suggest) failed: ${message}`);
   }
 }
 

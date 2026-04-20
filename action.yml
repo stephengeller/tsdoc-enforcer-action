@@ -1,4 +1,4 @@
-name: "TSDoc Enforcer (Suggest)"
+name: "Doc Scribe (Suggest)"
 description: "Fails PRs that add TypeScript symbols without TSDoc or without a why-shaped @remarks. Uses Anthropic Claude to either suggest an inline TSDoc or ask the author targeted questions about the why."
 author: "stephengeller"
 branding:
