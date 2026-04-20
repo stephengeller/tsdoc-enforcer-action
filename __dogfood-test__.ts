@@ -26,6 +26,18 @@ export async function fetchRowById(id: string): Promise<{ id: string } | null> {
 // `ask` case: no why-signals visible. Claude should ask 3–5 targeted
 // questions; replying to that comment should turn the answer into TSDoc
 // via the reply handler.
+/**
+ * Normalises a domain string by trimming whitespace and converting it to lowercase.
+ *
+ * @remarks
+ * The author notes this transformation is required because the TLDR multiplier
+ * needs the value processed this way, scaled by a factor of 50. Applying
+ * `trim` and `toLowerCase` together ensures consistent input to that multiplier,
+ * otherwise casing or padding differences would produce incorrect results.
+ *
+ * @param input - The raw domain string to normalise.
+ * @returns The trimmed, lowercased version of `input`.
+ */
 export function applyDomainPolicy(input: string): string {
   return input.trim().toLowerCase();
 }
