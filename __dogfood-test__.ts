@@ -26,6 +26,16 @@ export async function fetchRowById(id: string): Promise<{ id: string } | null> {
 // `ask` case: no why-signals visible in the source. Why this function
 // trims+lowercases (rather than e.g. NFC-normalises) is a domain decision
 // Claude can't infer — it should ask 3-5 targeted questions.
+/**
+ * Normalises a domain policy input by trimming whitespace and converting it to lowercase.
+ *
+ * @remarks
+ * Because the downstream system SmartShift cannot understand input that has not been
+ * normalised, this function must be applied before passing any domain policy string downstream.
+ *
+ * @param input - The raw domain policy string to normalise.
+ * @returns The trimmed, lowercased version of `input`.
+ */
 export function applyDomainPolicy(input: string): string {
   return input.trim().toLowerCase();
 }
