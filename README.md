@@ -1,6 +1,6 @@
 # Doc Scribe
 
-A GitHub Action that flags TypeScript symbols missing TSDoc, asks the author for the _why_ in an inline review comment, then commits a complete TSDoc block when the author replies. The repository slug is still `stephengeller/tsdoc-enforcer-action` — only the user-visible name changed.
+A GitHub Action that flags TypeScript symbols missing TSDoc, asks the author for the _why_ in an inline review comment, then commits a complete TSDoc block when the author replies. Repository: `stephengeller/github-actions`.
 
 Ships three variants from this repo:
 
@@ -51,7 +51,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: stephengeller/tsdoc-enforcer-action@main
+      - uses: stephengeller/github-actions@main
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
@@ -83,7 +83,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: stephengeller/tsdoc-enforcer-action/reply@main
+      - uses: stephengeller/github-actions/reply@main
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
@@ -111,7 +111,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: stephengeller/tsdoc-enforcer-action/report@main
+      - uses: stephengeller/github-actions/report@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```

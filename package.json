@@ -1,5 +1,5 @@
 {
-  "name": "tsdoc-enforcer-action",
+  "name": "github-actions",
   "version": "0.1.0",
   "private": true,
   "description": "GitHub Action that enforces TSDoc on TypeScript PRs and generates paste-ready doc blocks via Claude.",
@@ -15,7 +15,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stephengeller/tsdoc-enforcer-action.git"
+    "url": "git+https://github.com/stephengeller/github-actions.git"
   },
   "license": "MIT",
   "engines": {
