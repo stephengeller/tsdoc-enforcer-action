@@ -1,23 +1,23 @@
 name: Auto Downstream PR
 description: >
-  Runs in the downstream repo (e.g. amber-core). Given upstream PR metadata as
-  inputs, runs a user-supplied update command (typically `git subrepo pull`)
-  and opens or updates a PR that pulls the change in.
-author: amberelectric
+  Runs in a downstream repo. Given upstream PR metadata as inputs, runs a
+  user-supplied update command and opens or updates a PR that pulls the
+  change in.
+
 inputs:
   token:
     description: >
       Token with contents:write and pull-requests:write on this repo. Use
       actions/create-github-app-token to mint one from a GitHub App.
     required: true
-  integration-name:
+  source-name:
     description: >
-      Short slug for the upstream integration (e.g. "growatt"). Used in the
-      branch name, commit message, PR title, and as $INTEGRATION inside
-      update-command.
+      Short slug identifying the upstream source of the change. Used in the
+      branch name, commit message, PR title, and exposed as $SOURCE_NAME
+      inside update-command.
     required: true
   upstream-repo:
-    description: "owner/repo of the upstream integration that triggered this run."
+    description: "owner/repo that triggered this run."
     required: true
   upstream-pr-number:
     description: Number of the merged upstream PR.
@@ -41,10 +41,8 @@ inputs:
     description: >
       Shell snippet executed inside the checked-out downstream repo. Must
       produce a non-empty `git diff` to trigger a PR. Environment:
-      $INTEGRATION, $UPSTREAM_SHA, $UPSTREAM_PR, $UPSTREAM_REPO.
-    required: false
-    default: |
-      git subrepo pull "oem/${INTEGRATION}"
+      $SOURCE_NAME, $UPSTREAM_SHA, $UPSTREAM_PR, $UPSTREAM_REPO.
+    required: true
   base:
     description: Base branch for the downstream PR.
     required: false
@@ -56,7 +54,7 @@ inputs:
   reviewers:
     description: Comma-separated users/teams to request review from.
     required: false
-    default: amberelectric/oem-dev
+    default: ""
   labels:
     description: Comma-separated labels to apply.
     required: false
@@ -96,7 +94,7 @@ runs:
       id: vars
       shell: bash
       env:
-        INTEGRATION: ${{ inputs.integration-name }}
+        SOURCE_NAME: ${{ inputs.source-name }}
         PREFIX: ${{ inputs.branch-prefix }}
         UPSTREAM_PR: ${{ inputs.upstream-pr-number }}
         UPSTREAM_SHA: ${{ inputs.upstream-sha }}
@@ -108,14 +106,14 @@ runs:
         PR_TITLE_IN: ${{ inputs.pr-title }}
       run: |
         set -euo pipefail
-        branch="${PREFIX}-${INTEGRATION}-pr-${UPSTREAM_PR}"
+        branch="${PREFIX}-${SOURCE_NAME}-pr-${UPSTREAM_PR}"
         echo "branch=${branch}" >> "$GITHUB_OUTPUT"
 
         short_sha="${UPSTREAM_SHA:0:7}"
         if [ -n "${COMMIT_MESSAGE_IN}" ]; then
           commit_msg="${COMMIT_MESSAGE_IN}"
         else
-          commit_msg="chore(${INTEGRATION}): bump to ${short_sha} (${UPSTREAM_REPO}#${UPSTREAM_PR})"
+          commit_msg="chore(${SOURCE_NAME}): bump to ${short_sha} (${UPSTREAM_REPO}#${UPSTREAM_PR})"
         fi
         {
           echo "commit_message<<__EOF__"
@@ -126,7 +124,7 @@ runs:
         if [ -n "${PR_TITLE_IN}" ]; then
           pr_title="${PR_TITLE_IN}"
         else
-          pr_title="chore(${INTEGRATION}): pull in ${UPSTREAM_REPO}#${UPSTREAM_PR}"
+          pr_title="chore(${SOURCE_NAME}): pull in ${UPSTREAM_REPO}#${UPSTREAM_PR}"
         fi
         {
           echo "pr_title<<__EOF__"
@@ -148,7 +146,7 @@ runs:
           echo "Automated bump triggered by ${UPSTREAM_REPO}#${UPSTREAM_PR}."
           echo ""
           echo "**Upstream PR:** [${title_line}](${upstream_link})"
-          echo "**Integration:** \`${INTEGRATION}\`"
+          echo "**Source:** \`${SOURCE_NAME}\`"
           echo "**Merge commit:** \`${UPSTREAM_SHA}\`"
           if [ -n "${author_line}" ]; then echo "${author_line}"; fi
           echo ""
@@ -167,7 +165,7 @@ runs:
       shell: bash
       env:
         BRANCH: ${{ steps.vars.outputs.branch }}
-        INTEGRATION: ${{ inputs.integration-name }}
+        SOURCE_NAME: ${{ inputs.source-name }}
         UPSTREAM_SHA: ${{ inputs.upstream-sha }}
         UPSTREAM_PR: ${{ inputs.upstream-pr-number }}
         UPSTREAM_REPO: ${{ inputs.upstream-repo }}

@@ -3,7 +3,7 @@ description: >
   Runs in an upstream repo on PR merge. Fires a workflow_dispatch at the
   downstream repo's auto-downstream-pr workflow, passing the upstream PR
   metadata as inputs.
-author: amberelectric
+
 inputs:
   token:
     description: >
@@ -11,19 +11,19 @@ inputs:
       actions/create-github-app-token to mint one from a GitHub App.
     required: true
   downstream-repo:
-    description: "owner/repo that hosts the bump workflow (e.g. amberelectric/amber-core)."
+    description: "owner/repo that hosts the bump workflow."
     required: true
   downstream-workflow:
     description: >
       Workflow file name or ID in the downstream repo to dispatch
-      (e.g. "bump-from-oem.yml").
+      (e.g. "bump-from-upstream.yml").
     required: true
   downstream-ref:
     description: Branch of the downstream repo to dispatch the workflow on.
     required: false
     default: main
-  integration-name:
-    description: Short slug for this integration (e.g. "growatt").
+  source-name:
+    description: Short slug identifying this upstream source.
     required: true
 
 runs:
@@ -45,7 +45,7 @@ runs:
         DOWNSTREAM_REPO: ${{ inputs.downstream-repo }}
         DOWNSTREAM_WORKFLOW: ${{ inputs.downstream-workflow }}
         DOWNSTREAM_REF: ${{ inputs.downstream-ref }}
-        INTEGRATION: ${{ inputs.integration-name }}
+        SOURCE_NAME: ${{ inputs.source-name }}
         UPSTREAM_REPO: ${{ github.repository }}
         UPSTREAM_PR: ${{ github.event.pull_request.number }}
         UPSTREAM_SHA: ${{ github.event.pull_request.merge_commit_sha }}
@@ -57,7 +57,7 @@ runs:
         gh workflow run "${DOWNSTREAM_WORKFLOW}" \
           --repo "${DOWNSTREAM_REPO}" \
           --ref  "${DOWNSTREAM_REF}" \
-          -f "integration-name=${INTEGRATION}" \
+          -f "source-name=${SOURCE_NAME}" \
           -f "upstream-repo=${UPSTREAM_REPO}" \
           -f "upstream-pr-number=${UPSTREAM_PR}" \
           -f "upstream-sha=${UPSTREAM_SHA}" \
@@ -68,6 +68,6 @@ runs:
         {
           echo "### Dispatched downstream bump"
           echo "- Downstream: \`${DOWNSTREAM_REPO}\` (workflow: \`${DOWNSTREAM_WORKFLOW}\`)"
-          echo "- Integration: \`${INTEGRATION}\`"
+          echo "- Source: \`${SOURCE_NAME}\`"
           echo "- Upstream PR: \`${UPSTREAM_REPO}#${UPSTREAM_PR}\` @ \`${UPSTREAM_SHA}\`"
         } >> "$GITHUB_STEP_SUMMARY"
