@@ -1,0 +1,102 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Example consumer workflow — drops into the DOWNSTREAM repo
+#
+# Save as: .github/workflows/sync-oem-integrations.yml
+#
+# Every 5 minutes (GitHub's cron floor), this workflow asks each OEM upstream
+# repo for its latest main SHA and compares against what's pinned in this
+# repo's subrepo. Drifted integrations get an auto-bump PR opened here.
+#
+# ── Why this shape, and not one-workflow-per-integration? ─────────────────────
+#
+#   • Adding a new integration = append ONE line to `integrations` below.
+#   • No new App, no new secret, no new workflow file per integration.
+#   • Single runner per cron tick → ~72% of the GitHub Team free tier at
+#     5-minute cadence, rounding error on Enterprise. See the action's README
+#     for the full cost breakdown.
+#
+# ── Security boundary ─────────────────────────────────────────────────────────
+#
+# The list of integrations below IS the allowlist. A dispatch can't fire from
+# an upstream that isn't in this file. To add an OEM, someone has to open a
+# PR to this repo — that's the audit trail. Nothing in org settings controls
+# whether an integration is active.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Sync OEM integrations
+
+on:
+  # 5-min cadence is GitHub's cron floor. At the optimized single-job shape
+  # this is ~2,160 billed min/month — fits inside the Team tier with headroom.
+  # Increase to */15 if you want to be more conservative on minutes.
+  schedule:
+    - cron: "*/5 * * * *"
+
+  # Manual trigger for "I just merged, poke the pipeline now instead of waiting
+  # ~5 min". Cheap to have.
+  workflow_dispatch:
+
+# Prevent two cron runs overlapping if one takes longer than the 5-min tick
+# (can happen when multiple integrations drift at once and each needs a PR).
+concurrency:
+  group: sync-oem-integrations
+  cancel-in-progress: false
+
+permissions:
+  # The job mints its own token from the bot App, so the default GITHUB_TOKEN
+  # permissions are irrelevant. Set contents:read as a belt-and-braces minimum
+  # in case any step falls back to GITHUB_TOKEN.
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # Mint an installation token scoped to this repo. The App must also be
+      # installed on every OEM upstream in the integrations list below with
+      # `contents: read`, so the token can read their HEAD SHAs.
+      - uses: actions/create-github-app-token@v1
+        id: token
+        with:
+          app-id: ${{ vars.AMBER_BOT_APP_ID }}
+          private-key: ${{ secrets.AMBER_BOT_PRIVATE_KEY }}
+          owner: amberelectric
+          # Deliberately no `repositories:` here — we need cross-repo read on
+          # the upstreams AND write on this repo. Defaults to all repos the App
+          # is installed on in this owner.
+
+      - uses: amberelectric/oem-github-actions/sync-from-upstream@v2
+        with:
+          token: ${{ steps.token.outputs.token }}
+
+          # ────────────────────────────────────────────────────────────────
+          # THE INTEGRATION LIST — the one place you add a new OEM.
+          #
+          # Adding a new one? Append an entry here, PR it, merge, done.
+          # No App install. No secret rotation. No upstream-side changes.
+          # ────────────────────────────────────────────────────────────────
+          integrations: |
+            [
+              {"name": "growatt", "repo": "amberelectric/oem-growatt"},
+              {"name": "deye",    "repo": "amberelectric/oem-deye"}
+            ]
+
+          # How we extract the currently-pinned SHA for each integration, WITHOUT
+          # cloning this repo (we're on the fast path — 99% of cron ticks exit
+          # here). We use `gh api contents` to fetch the `.gitrepo` file that
+          # git-subrepo stamps into each subrepo path, then awk out the `commit`
+          # line. The action exports $SOURCE_NAME per iteration.
+          pinned-sha-command: |
+            gh api "repos/${GITHUB_REPOSITORY}/contents/oem/${SOURCE_NAME}/.gitrepo" \
+              -q .content | base64 -d \
+              | awk -F= '/^[[:space:]]*commit[[:space:]]*=/ {gsub(/ /,""); print $2}'
+
+          # How we actually apply the bump once drift is confirmed. git-subrepo
+          # pull rewrites the subrepo's contents and re-stamps `.gitrepo`.
+          # Runs in the checked-out repo on a fresh branch.
+          update-command: |
+            git subrepo pull "oem/${SOURCE_NAME}"
+
+          # Optional PR ergonomics. Leave blank to skip.
+          reviewers: ""
+          labels: "automation,oem-bump"

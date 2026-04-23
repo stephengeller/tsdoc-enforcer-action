@@ -1,0 +1,379 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# sync-from-upstream
+#
+# A composite action that runs inside a "downstream" repo on a schedule, checks
+# one-or-more "upstream" repos for commits past whatever SHA this downstream
+# currently has pinned, and opens/updates a PR pulling each drifted upstream in.
+#
+# This is the *polling* variant of the hub-and-spoke automation in this repo.
+# The companion *push* variant lives in auto-downstream-pr/ — it fires instantly
+# on upstream PR merge but requires configuration on every upstream repo
+# (workflow file, GitHub App install, repo secret).
+#
+# ── Why polling? ──────────────────────────────────────────────────────────────
+#
+# Adding a new integration becomes a ONE-LINE code change in the downstream repo
+# (append to the `integrations` JSON list). No work on the upstream side. No App
+# install. No org-admin clicks. No per-upstream secrets.
+#
+# The trade-off is latency: scheduled workflows fire every N minutes (GitHub's
+# cron minimum is 5 min, and scheduling is best-effort — real-world delays of
+# 5–20 min are normal). For auto-bump PRs that humans still review, that's
+# indistinguishable from instant-push.
+#
+# ── Why a single job instead of a matrix? ─────────────────────────────────────
+#
+# GitHub Actions bills per minute of runner wall-clock, per job. Matrix jobs
+# each pay the ~10–15s runner-boot tax. A single job iterating in bash pays
+# that once, then spends milliseconds per integration on the "nothing changed"
+# fast path (which is >99% of cron ticks). At 5-minute cadence across 10
+# integrations, this is the difference between ~14,000 billed min/month (matrix)
+# and ~1,000 billed min/month (single job).
+#
+# ── Why no `actions/checkout` on the fast path? ───────────────────────────────
+#
+# `actions/checkout` is the single most expensive step in most workflows
+# (~20s for a clean clone). The drift check only needs to read two SHAs:
+# upstream's latest, and downstream's current pin. Both are one `gh api` call.
+# We only pay the checkout cost when we've *already confirmed* there's a bump
+# to make — i.e. a handful of times per day, not 8,640 times per month.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Sync from upstream (poll)
+description: >
+  Polls one or more upstream repos for new commits past the SHA this
+  downstream has pinned, and opens a PR pulling each drift in. Designed to
+  run on a schedule in the downstream repo. Generic over how the downstream
+  consumes upstream (user supplies the commands).
+
+inputs:
+  token:
+    description: >
+      Token with `contents: read` on every upstream repo in the integrations
+      list, and `contents: write` + `pull_requests: write` on this downstream
+      repo. Typically minted from a single shared GitHub App installed on
+      every relevant repo — `actions/create-github-app-token@v1` is the
+      conventional way.
+    required: true
+
+  integrations:
+    description: >
+      JSON array of upstream sources to poll. Each entry is:
+        { "name": "<slug>", "repo": "<owner>/<name>", "ref": "<branch>" }
+      `ref` is optional and defaults to `main`.
+      Example:
+        [
+          {"name":"growatt","repo":"amberelectric/oem-growatt"},
+          {"name":"deye",   "repo":"amberelectric/oem-deye"}
+        ]
+      Adding a new integration is literally one line appended to this list.
+    required: true
+
+  pinned-sha-command:
+    description: >
+      Shell snippet that prints the currently pinned SHA for one integration
+      to stdout. Runs with `$SOURCE_NAME` and `$UPSTREAM_REPO` in scope and
+      MUST NOT require a local checkout — it runs on the fast path, before
+      we decide whether to pay the checkout cost. Use `gh api` to read files
+      directly from this repo.
+
+      Example (git-subrepo, which stores the pinned SHA in `<path>/.gitrepo`):
+        gh api "repos/${GITHUB_REPOSITORY}/contents/oem/${SOURCE_NAME}/.gitrepo" \
+          -q .content | base64 -d \
+          | awk -F= '/^[[:space:]]*commit[[:space:]]*=/ {gsub(/ /,""); print $2}'
+
+      If the command prints nothing or errors, the integration is treated as
+      "needs bump" (defensive — better to surface drift than to silently skip).
+    required: true
+
+  update-command:
+    description: >
+      Shell snippet that actually produces the update in the downstream
+      working tree for one drifted integration. Runs inside a checked-out
+      repo (on a fresh branch off `base`) with these vars in scope:
+        $SOURCE_NAME      — integration slug, e.g. "growatt"
+        $UPSTREAM_REPO    — "owner/name" of the upstream
+        $UPSTREAM_SHA     — new upstream SHA we're bumping to
+        $UPSTREAM_REF     — upstream branch name (usually "main")
+      Must produce a non-empty `git diff`. See the sibling auto-downstream-pr
+      action's README for recipes (go.mod, yq, submodule, subrepo).
+    required: true
+
+  base:
+    description: Base branch for the downstream PR.
+    required: false
+    default: main
+
+  branch-prefix:
+    description: >
+      Prefix for the branch created in this repo. Final branch name is
+      `<prefix>-<source-name>-<short-sha>` — deterministic per (integration,
+      upstream SHA) so reruns update the same PR instead of creating dupes.
+    required: false
+    default: auto/bump
+
+  reviewers:
+    description: Comma-separated users/teams to request review from per PR.
+    required: false
+    default: ""
+
+  labels:
+    description: Comma-separated labels to apply per PR.
+    required: false
+    default: ""
+
+  git-user-name:
+    description: git config user.name for commits.
+    required: false
+    default: github-actions[bot]
+
+  git-user-email:
+    description: git config user.email for commits.
+    required: false
+    default: 41898282+github-actions[bot]@users.noreply.github.com
+
+outputs:
+  stale-count:
+    description: Number of integrations found drifted this run.
+    value: ${{ steps.detect.outputs.stale-count }}
+  bumped:
+    description: JSON array of integrations for which a PR was opened/updated.
+    value: ${{ steps.bump.outputs.bumped }}
+
+runs:
+  using: composite
+  steps:
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 1 — DRIFT DETECTION (the hot path)
+    #
+    # Runs on every cron tick. No checkout. Pure `gh api` calls. Designed to
+    # finish in <10 seconds including runner boot when nothing has drifted,
+    # which is the case >99% of the time.
+    #
+    # For each integration we:
+    #   (a) ask GitHub for the upstream's current HEAD SHA on its tracked branch
+    #   (b) run the user's pinned-sha-command to read what *this repo* has pinned
+    #   (c) compare; if different, add to the stale list
+    #
+    # Output: a JSON array of `{name, repo, ref, upstream-sha}` for stale ones.
+    # If empty, subsequent steps are skipped via `if:` and the job exits clean.
+    # ──────────────────────────────────────────────────────────────────────────
+    - name: Detect drift (no checkout)
+      id: detect
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        INTEGRATIONS_JSON: ${{ inputs.integrations }}
+        PINNED_SHA_COMMAND: ${{ inputs.pinned-sha-command }}
+      run: |
+        set -euo pipefail
+
+        # Parse the integrations list. `jq -c` keeps each entry as compact JSON
+        # so we can round-trip them through the bash loop without quoting hell.
+        mapfile -t entries < <(echo "${INTEGRATIONS_JSON}" | jq -c '.[]')
+
+        stale='[]'
+        for entry in "${entries[@]}"; do
+          name="$(echo "$entry" | jq -r '.name')"
+          repo="$(echo "$entry" | jq -r '.repo')"
+          # Default ref to "main" if not specified — most consumers won't set it.
+          ref="$(echo "$entry" | jq -r '.ref // "main"')"
+
+          # Fetch upstream HEAD for the tracked branch. Single REST call.
+          upstream_sha="$(gh api "repos/${repo}/commits/${ref}" -q .sha)"
+
+          # Run user's pinned-sha-command in a subshell with the per-integration
+          # env exported. If the command fails or prints empty, we treat the
+          # integration as stale — safer to open a no-op PR (update-command
+          # would exit clean anyway) than to silently skip a real drift.
+          pinned="$(
+            SOURCE_NAME="${name}" \
+            UPSTREAM_REPO="${repo}" \
+            bash -eo pipefail -c "${PINNED_SHA_COMMAND}" 2>/dev/null || true
+          )"
+
+          if [ -z "${pinned}" ] || [ "${pinned}" != "${upstream_sha}" ]; then
+            echo "::notice::${name}: drift detected (pinned=${pinned:-<unknown>} upstream=${upstream_sha})"
+            stale="$(echo "${stale}" | jq --arg n "${name}" --arg r "${repo}" \
+              --arg f "${ref}" --arg s "${upstream_sha}" \
+              '. + [{name: $n, repo: $r, ref: $f, "upstream-sha": $s}]')"
+          else
+            echo "${name}: up to date (${pinned:0:7})"
+          fi
+        done
+
+        # Multi-line output via heredoc delimiter — GitHub's recommended pattern
+        # for emitting structured values from shell steps.
+        {
+          echo "stale<<__EOF__"
+          echo "${stale}"
+          echo "__EOF__"
+          echo "stale-count=$(echo "${stale}" | jq 'length')"
+        } >> "$GITHUB_OUTPUT"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 2 — CHECKOUT (only if something drifted)
+    #
+    # Gated on `stale-count > 0`. On a typical quiet tick this never runs, and
+    # the whole job finishes in ~10–15s. On an active tick (upstream merged
+    # something in the last 5 min) we pay ~20s to clone, once, regardless of
+    # how many integrations drifted.
+    #
+    # fetch-depth: 0 so we can create and push branches off `base`.
+    # ──────────────────────────────────────────────────────────────────────────
+    - name: Checkout (only on drift)
+      if: steps.detect.outputs.stale-count != '0'
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.base }}
+        token: ${{ inputs.token }}
+        fetch-depth: 0
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 3 — BUMP LOOP
+    #
+    # For each stale integration we:
+    #   (a) reset the working tree hard to `base`
+    #   (b) check out a deterministic branch: `<prefix>-<name>-<short-sha>`
+    #       — the short-sha of the TARGET SHA, so reruns on the same upstream
+    #       commit land on the same PR (idempotent)
+    #   (c) run the user's update-command
+    #   (d) if it produced a diff, commit + force-push + create-or-update PR
+    #
+    # We process integrations serially on one runner. Each iteration is a
+    # full branch-reset, so state doesn't leak between integrations.
+    #
+    # Failures for ONE integration don't abort the others — we collect them
+    # and report via ::warning so a flaky upstream doesn't block the rest.
+    # ──────────────────────────────────────────────────────────────────────────
+    - name: Open PRs for drifted integrations
+      id: bump
+      if: steps.detect.outputs.stale-count != '0'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        STALE_JSON: ${{ steps.detect.outputs.stale }}
+        UPDATE_COMMAND: ${{ inputs.update-command }}
+        BASE: ${{ inputs.base }}
+        PREFIX: ${{ inputs.branch-prefix }}
+        REVIEWERS: ${{ inputs.reviewers }}
+        LABELS: ${{ inputs.labels }}
+        GIT_USER_NAME: ${{ inputs.git-user-name }}
+        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+      run: |
+        set -euo pipefail
+
+        git config user.name  "${GIT_USER_NAME}"
+        git config user.email "${GIT_USER_EMAIL}"
+
+        bumped='[]'
+
+        mapfile -t stale < <(echo "${STALE_JSON}" | jq -c '.[]')
+        for entry in "${stale[@]}"; do
+          name="$(echo "$entry" | jq -r '.name')"
+          repo="$(echo "$entry" | jq -r '.repo')"
+          ref="$(echo "$entry" | jq -r '.ref')"
+          upstream_sha="$(echo "$entry" | jq -r '."upstream-sha"')"
+          short_sha="${upstream_sha:0:7}"
+          branch="${PREFIX}-${name}-${short_sha}"
+
+          echo "::group::Bumping ${name} → ${short_sha}"
+
+          # Hard-reset to base so state from the previous integration's run
+          # doesn't leak. `|| true` because the first iteration is already
+          # on base from the checkout step.
+          git checkout "${BASE}" 2>/dev/null || true
+          git reset --hard "origin/${BASE}"
+          git checkout -B "${branch}"
+
+          # Run the user's update-command with a fresh env. Doing this in an
+          # explicit subshell so `set -e` in the parent doesn't abort on a
+          # non-fatal stderr from the snippet (we want to continue to other
+          # integrations even if one fails).
+          if ! (
+            SOURCE_NAME="${name}" \
+            UPSTREAM_REPO="${repo}" \
+            UPSTREAM_REF="${ref}" \
+            UPSTREAM_SHA="${upstream_sha}" \
+              bash -eo pipefail -c "${UPDATE_COMMAND}"
+          ); then
+            echo "::warning::${name}: update-command failed; skipping"
+            echo "::endgroup::"
+            continue
+          fi
+
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "::warning::${name}: update-command produced no diff; skipping"
+            echo "::endgroup::"
+            continue
+          fi
+
+          commit_msg="chore(${name}): bump to ${short_sha} (${repo})"
+          git add -A
+          git commit -m "${commit_msg}"
+          # --force-with-lease so a concurrent writer to this branch wins
+          # instead of us silently clobbering their work. (In practice it's
+          # just this job writing, but the habit is cheap.)
+          git push --force-with-lease origin "${branch}"
+
+          # dedupe: if a PR already exists for this branch, update its title/
+          # body; otherwise open a new one. `gh pr list --head` scopes by
+          # branch name, so our deterministic branches make this idempotent.
+          pr_title="chore(${name}): pull in ${repo}@${short_sha}"
+          pr_body=$(cat <<PRBODY
+        Automated bump from scheduled poll.
+
+        **Source:** \`${name}\`
+        **Upstream:** \`${repo}\` @ \`${upstream_sha}\`
+        **Branch tracked:** \`${ref}\`
+
+        _Generated by the \`sync-from-upstream\` action. Re-runs on the same upstream SHA update this PR in place._
+        PRBODY
+          )
+
+          existing="$(gh pr list --head "${branch}" --state open \
+            --json url,number --jq '.[0] // empty')"
+          if [ -n "${existing}" ]; then
+            number="$(echo "${existing}" | jq -r .number)"
+            url="$(echo "${existing}" | jq -r .url)"
+            gh pr edit "${number}" --title "${pr_title}" --body "${pr_body}"
+          else
+            url="$(gh pr create --base "${BASE}" --head "${branch}" \
+              --title "${pr_title}" --body "${pr_body}")"
+            number="$(gh pr view "${url}" --json number --jq .number)"
+          fi
+
+          # Reviewer/label assignment failures don't fail the run — a missing
+          # team is annoying but shouldn't block the bump.
+          if [ -n "${REVIEWERS}" ]; then
+            gh pr edit "${number}" --add-reviewer "${REVIEWERS}" \
+              || echo "::warning::${name}: failed to add reviewers"
+          fi
+          if [ -n "${LABELS}" ]; then
+            gh pr edit "${number}" --add-label "${LABELS}" \
+              || echo "::warning::${name}: failed to add labels"
+          fi
+
+          bumped="$(echo "${bumped}" | jq --arg n "${name}" --arg u "${url}" \
+            '. + [{name: $n, url: $u}]')"
+          echo "::notice::${name}: ${url}"
+          echo "::endgroup::"
+        done
+
+        {
+          echo "bumped<<__EOF__"
+          echo "${bumped}"
+          echo "__EOF__"
+        } >> "$GITHUB_OUTPUT"
+
+        # Per-run summary for the Actions UI — humans skim this, not the raw log.
+        {
+          echo "### Sync from upstream"
+          count="$(echo "${bumped}" | jq 'length')"
+          if [ "${count}" = "0" ]; then
+            echo "_Drift detected but no PRs opened (update-command produced no diff, or failed — see log)._"
+          else
+            echo "${count} PR(s) opened/updated:"
+            echo "${bumped}" | jq -r '.[] | "- [\(.name)](\(.url))"'
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
