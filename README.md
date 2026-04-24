@@ -1,15 +1,15 @@
 # OEM GitHub Actions
 
-A collection of reusable GitHub Actions for the OEM team. Repository: `stephengeller/github-actions`.
+A collection of reusable GitHub Actions for the OEM team. Repository: `amberelectric/oem-github-actions`.
 
 ## Actions
 
-| Action                                      | Path                                                   | Purpose                                                     |
-| ------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------- |
-| [Doc Scribe (Suggest)](#doc-scribe-suggest) | `stephengeller/github-actions@main`                    | Claude-powered inline TSDoc review on PRs                   |
-| [Doc Scribe (Reply)](#doc-scribe-reply)     | `stephengeller/github-actions/reply@main`              | Commits TSDoc when an author replies to a suggest thread    |
-| [Doc Scribe (Report)](#doc-scribe-report)   | `stephengeller/github-actions/report@main`             | AI-free: posts a violation list with a paste-ready prompt   |
-| [Auto Downstream PR](#auto-downstream-pr)   | `stephengeller/github-actions/auto-downstream-pr@main` | Opens or updates a downstream PR when an upstream PR merges |
+| Action                                      | Path                                                       | Purpose                                                     |
+| ------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------- |
+| [Doc Scribe (Suggest)](#doc-scribe-suggest) | `amberelectric/oem-github-actions@main`                    | Claude-powered inline TSDoc review on PRs                   |
+| [Doc Scribe (Reply)](#doc-scribe-reply)     | `amberelectric/oem-github-actions/reply@main`              | Commits TSDoc when an author replies to a suggest thread    |
+| [Doc Scribe (Report)](#doc-scribe-report)   | `amberelectric/oem-github-actions/report@main`             | AI-free: posts a violation list with a paste-ready prompt   |
+| [Auto Downstream PR](#auto-downstream-pr)   | `amberelectric/oem-github-actions/auto-downstream-pr@main` | Opens or updates a downstream PR when an upstream PR merges |
 
 ---
 
@@ -54,7 +54,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: stephengeller/github-actions@main
+      - uses: amberelectric/oem-github-actions@main
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
@@ -97,7 +97,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: stephengeller/github-actions/reply@main
+      - uses: amberelectric/oem-github-actions/reply@main
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
@@ -134,7 +134,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: stephengeller/github-actions/report@main
+      - uses: amberelectric/oem-github-actions/report@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -168,7 +168,7 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: stephengeller/github-actions/auto-downstream-pr@main
+      - uses: amberelectric/oem-github-actions/auto-downstream-pr@main
         with:
           token: ${{ secrets.DOWNSTREAM_APP_TOKEN }}
           source-name: my-upstream
