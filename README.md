@@ -1,16 +1,27 @@
-# Doc Scribe
+# OEM GitHub Actions
 
-A GitHub Action that flags TypeScript symbols missing TSDoc, asks the author for the _why_ in an inline review comment, then commits a complete TSDoc block when the author replies. Repository: `stephengeller/github-actions`.
+A collection of reusable GitHub Actions for the OEM team. Repository: `stephengeller/github-actions`.
 
-Ships three variants from this repo:
+## Actions
 
-- **`suggest`** (root, Anthropic Claude) — posts a PR review with an inline TSDoc suggestion for each symbol whose why is inferable, or targeted questions when it isn't.
-- **`reply`** (`/reply`) — reacts to review-comment replies on the suggest threads: Claude turns the author's why into a complete TSDoc block and commits it back to the PR head.
-- **`report`** (`/report`, AI-free) — no inference call. Posts a single PR comment listing every violation with a paste-ready prompt you can drop into any AI tool.
+| Action                                      | Path                                                   | Purpose                                                     |
+| ------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------- |
+| [Doc Scribe (Suggest)](#doc-scribe-suggest) | `stephengeller/github-actions@main`                    | Claude-powered inline TSDoc review on PRs                   |
+| [Doc Scribe (Reply)](#doc-scribe-reply)     | `stephengeller/github-actions/reply@main`              | Commits TSDoc when an author replies to a suggest thread    |
+| [Doc Scribe (Report)](#doc-scribe-report)   | `stephengeller/github-actions/report@main`             | AI-free: posts a violation list with a paste-ready prompt   |
+| [Auto Downstream PR](#auto-downstream-pr)   | `stephengeller/github-actions/auto-downstream-pr@main` | Opens or updates a downstream PR when an upstream PR merges |
 
 ---
 
-## What it checks
+## Doc Scribe
+
+Doc Scribe flags TypeScript symbols missing TSDoc, asks the author for the _why_ in an inline review comment, then commits a complete TSDoc block when the author replies. It ships three variants:
+
+- **`suggest`** — posts a PR review with an inline TSDoc suggestion for each symbol whose why is inferable, or targeted questions when it isn't (requires Anthropic key)
+- **`reply`** — reacts to review-comment replies on suggest threads: Claude turns the author's why into a complete TSDoc block and commits it back to the PR head
+- **`report`** — no inference call; posts a single PR comment listing every violation with a paste-ready prompt you can drop into any AI tool
+
+### What it checks
 
 Every **top-level** symbol on changed `.ts` / `.tsx` files in the PR, regardless of whether it's `export`ed:
 
@@ -20,21 +31,13 @@ Every **top-level** symbol on changed `.ts` / `.tsx` files in the PR, regardless
 | Function / method with parameters                                        | `@param` for every non-underscore parameter, with a non-empty description |
 | Function / method returning anything other than `void` / `Promise<void>` | `@returns` with a non-empty description                                   |
 
-Intentionally **not** checked:
-
-- Private / protected methods inside classes
-- Parameters whose names start with `_` (convention: intentionally unused)
-- Nested functions, arrow functions assigned to variables, and other non-top-level declarations
-
-Prose _quality_ is not graded — `@param id - the id` passes structural checks even though it's useless.
+Intentionally **not** checked: private/protected methods inside classes, parameters whose names start with `_`, and nested/arrow functions.
 
 ---
 
-## Usage
+### Doc Scribe (Suggest)
 
-All three variants share identical structural + why-capture enforcement rules; they differ only in what they post and whether they require an Anthropic key.
-
-### suggest — Claude-powered inline review (recommended)
+Claude-powered inline review. Posts per-symbol TSDoc suggestions or targeted questions. Requires an Anthropic API key.
 
 ```yaml
 name: Doc Scribe
@@ -58,11 +61,22 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Set an `ANTHROPIC_API_KEY` repo secret first. Apply the `why-acknowledged` label on a PR to bypass the check (useful for mechanical refactors where authoring `@remarks` per symbol adds no value).
+**Inputs**
 
-### reply — commit the author's why back as TSDoc
+| Input                | Default             | Description                                                                                                                              |
+| -------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `anthropic-api-key`  | —                   | **Required.** Anthropic API key.                                                                                                         |
+| `anthropic-model`    | `claude-sonnet-4-6` | Claude model ID. Override to `claude-opus-4-7` for harder inference or `claude-haiku-4-5-20251001` for cheaper runs.                     |
+| `bypass-label`       | `why-acknowledged`  | Apply this label to a PR to skip the why-check entirely (useful for mechanical refactors).                                               |
+| `min-remarks-words`  | `15`                | Minimum word count for a `@remarks` block to satisfy the why-acceptance predicate.                                                       |
+| `why-keywords`       | `because,so that,…` | Comma-separated causal/constraint keywords. A `@remarks` block needs at least one keyword, a number-with-unit, or a `{@link}` reference. |
+| `max-symbols-for-ai` | `25`                | Hard cap on symbols sent to Claude per PR run. Above the cap, the check asks the author to document manually or apply the bypass label.  |
 
-Pair with the suggest variant. When an author replies to one of its inline comments, Claude turns the reply into a complete TSDoc block and commits it directly to the PR branch.
+---
+
+### Doc Scribe (Reply)
+
+Triggered by `pull_request_review_comment: [created]`. When an author replies to a Doc Scribe suggest thread, Claude turns the reply into a complete TSDoc block and commits it directly to the PR branch.
 
 ```yaml
 name: Doc Scribe Reply
@@ -90,9 +104,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-The handler only reacts to replies on threads it posted (identified by a hidden marker), never on unrelated review comments, and never on its own bot replies. Fork PRs fall back to a manual-apply hint because the default `GITHUB_TOKEN` is read-only on forks.
+The handler only reacts to replies on threads it posted (identified by a hidden marker) and never on its own bot replies. Fork PRs fall back to a manual-apply hint because the default `GITHUB_TOKEN` is read-only on forks.
 
-### report — AI-free, paste-ready prompt
+**Inputs**
+
+| Input               | Default             | Description                      |
+| ------------------- | ------------------- | -------------------------------- |
+| `anthropic-api-key` | —                   | **Required.** Anthropic API key. |
+| `anthropic-model`   | `claude-sonnet-4-6` | Claude model ID.                 |
+
+---
+
+### Doc Scribe (Report)
 
 No Anthropic key required. Posts one PR comment listing every violation with a consolidated prompt you can drop into any AI tool.
 
@@ -116,67 +139,77 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
----
+**Inputs**
 
-## What happens on a PR
-
-- ✅ **All changed exports are documented** → the Action passes silently, no comment.
-- 🚨 **Any changed export is missing/incomplete** → the Action:
-  1. Fails the check (exit 1), blocking the PR if the check is required
-  2. Posts/updates a single PR comment listing every violation with:
-     - `file:line — symbol (kind)` heading
-     - A `typescript` fenced block with the AI-generated TSDoc — paste directly above the symbol
-     - A collapsible "Regenerate with your own AI tool" section containing the full self-contained prompt
-
-The comment upserts — pushing more commits to the PR updates the existing comment instead of stacking new ones.
+| Input               | Default             | Description                                                                                  |
+| ------------------- | ------------------- | -------------------------------------------------------------------------------------------- |
+| `bypass-label`      | `why-acknowledged`  | Apply this label to soft-bypass the why-check (comment becomes informational, check passes). |
+| `min-remarks-words` | `15`                | Minimum word count for a `@remarks` block.                                                   |
+| `why-keywords`      | `because,so that,…` | Comma-separated causal/constraint keywords.                                                  |
 
 ---
 
-## Example output
+## Auto Downstream PR
 
-> 🚨 TSDoc missing for 1 symbol(s). Paste the blocks below directly above each symbol.
->
-> <details>
-> <summary><code>src/users.ts:42</code> — <code>fetchUserById</code> (function)</summary>
->
-> ```typescript
-> /**
->  * Fetches the user with the given id, returning `null` when no row exists.
->  *
->  * @param id - Primary key of the user to fetch.
->  * @param client - Database client used to issue the query.
->  * @returns The user row, or `null` when the id doesn't exist.
->  */
-> ```
->
-> <details>
-> <summary>Regenerate with your own AI tool</summary>
->
-> ```
-> <full paste-ready prompt: system rules + this specific symbol>
-> ```
->
-> </details>
-> </details>
+A composite action that runs in a **downstream** repo. Given upstream PR metadata as inputs, it runs a user-supplied update command and opens or updates a PR to pull the change in. Designed to be called from an upstream repo's post-merge workflow via `repository_dispatch` or `workflow_call`.
 
----
+```yaml
+name: Downstream bump
 
-## Rate limits and cost
+on:
+  workflow_dispatch:
+    inputs:
+      upstream-pr-number:
+        required: true
+      upstream-sha:
+        required: true
 
-Anthropic enforces per-workspace rate limits that vary by tier; a single PR hitting dozens of symbols can burst through the per-minute cap. The suggest variant has a `max-symbols-for-ai` input (default `25`) that guards against runaway spend on large mechanical PRs — above that cap, the check posts a one-line summary and asks the author to either document manually or apply the bypass label.
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: stephengeller/github-actions/auto-downstream-pr@main
+        with:
+          token: ${{ secrets.DOWNSTREAM_APP_TOKEN }}
+          source-name: my-upstream
+          upstream-repo: org/upstream-repo
+          upstream-pr-number: ${{ inputs.upstream-pr-number }}
+          upstream-sha: ${{ inputs.upstream-sha }}
+          update-command: |
+            npm install my-upstream@latest
+```
 
-The report variant makes zero inference calls and has no Anthropic rate-limit exposure.
+The `token` must have `contents: write` and `pull-requests: write` on the downstream repo. Use [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) to mint one from a GitHub App rather than a PAT.
 
----
+**Inputs**
 
-## How it works (internals)
+| Input                | Required | Default                          | Description                                                                                                                                                                         |
+| -------------------- | -------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `token`              | ✓        | —                                | Token with `contents:write` and `pull-requests:write` on the downstream repo.                                                                                                       |
+| `source-name`        | ✓        | —                                | Short slug for the upstream source. Used in branch name, commit message, and PR title. Also exposed as `$SOURCE_NAME` inside `update-command`.                                      |
+| `upstream-repo`      | ✓        | —                                | `owner/repo` that triggered the run.                                                                                                                                                |
+| `upstream-pr-number` | ✓        | —                                | Number of the merged upstream PR.                                                                                                                                                   |
+| `upstream-sha`       | ✓        | —                                | Merge commit SHA of the upstream PR.                                                                                                                                                |
+| `upstream-title`     |          | `""`                             | Title of the upstream PR (for the PR body).                                                                                                                                         |
+| `upstream-author`    |          | `""`                             | GitHub login of the upstream PR author (for the PR body).                                                                                                                           |
+| `upstream-url`       |          | `""`                             | HTML URL of the upstream PR (for the PR body).                                                                                                                                      |
+| `update-command`     | ✓        | —                                | Shell snippet executed inside the checked-out downstream repo. Must produce a non-empty `git diff`. Environment: `$SOURCE_NAME`, `$UPSTREAM_SHA`, `$UPSTREAM_PR`, `$UPSTREAM_REPO`. |
+| `base`               |          | `main`                           | Base branch for the downstream PR.                                                                                                                                                  |
+| `branch-prefix`      |          | `auto/bump`                      | Prefix for the branch created in the downstream repo.                                                                                                                               |
+| `reviewers`          |          | `""`                             | Comma-separated users/teams to request review from.                                                                                                                                 |
+| `labels`             |          | `""`                             | Comma-separated labels to apply.                                                                                                                                                    |
+| `commit-message`     |          | templated                        | Override commit message.                                                                                                                                                            |
+| `pr-title`           |          | templated                        | Override PR title.                                                                                                                                                                  |
+| `git-user-name`      |          | `github-actions[bot]`            | `git config user.name` for the commit.                                                                                                                                              |
+| `git-user-email`     |          | `41898282+github-actions[bot]@…` | `git config user.email` for the commit.                                                                                                                                             |
 
-1. **Diff** (`src/core/diff.ts`) — paginates `pulls.listFiles`, filters to `.ts` / `.tsx`, fetches each blob at the PR head SHA.
-2. **Analyze** (`src/core/analyze.ts` + `src/core/tsdoc-rules.ts` + `src/core/why-rules.ts`) — [ts-morph](https://ts-morph.com) walks each source file; collects top-level functions / classes / public methods / interfaces / type-aliases (regardless of `export` keyword); applies both the structural TSDoc predicate and the rule-based why-acceptance predicate.
-3. **Route/render** — the suggest variant calls Anthropic Claude per symbol via the `record_why_decision` tool and posts a PR review with inline suggestions or questions; the report variant skips inference and upserts a single PR comment with a consolidated prompt.
-4. **Reply** (`src/suggest/reply.ts`) — triggered by `pull_request_review_comment: [created]`; validates the thread is one of ours via a hidden marker, turns the reply body into a TSDoc block, commits it to the PR head branch, and resolves the thread.
+**Outputs**
 
-The rule-based why-acceptance predicate is deterministic — Claude authors _candidate_ remarks, but the predicate alone decides pass/fail, so the check never flaps between runs on identical code.
+| Output             | Description                                                     |
+| ------------------ | --------------------------------------------------------------- |
+| `pull-request-url` | URL of the created or updated downstream PR.                    |
+| `branch`           | Branch pushed to the downstream repo.                           |
+| `changed`          | `'true'` if the update-command produced a diff, else `'false'`. |
 
 ---
 
@@ -189,14 +222,6 @@ npm run build:all      # builds dist/, report/dist/, reply/dist/ via @vercel/ncc
 ```
 
 The `dist/` bundles are committed because GitHub Actions runners execute them directly — no `npm install` happens on the consumer side.
-
----
-
-## Roadmap (maybe)
-
-- Prose-quality grading via a second model pass (would catch `@param id - the id`)
-- `@throws` enforcement on functions containing `throw` statements
-- Cut a stable release tag once the three-variant shape settles
 
 ## License
 
