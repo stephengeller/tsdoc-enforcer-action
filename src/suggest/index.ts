@@ -9,6 +9,11 @@ import {
   type WhyRulesConfig,
 } from "../core/why-rules";
 import { DEFAULT_BYPASS_LABEL, hasBypassLabel } from "../core/bypass";
+import {
+  createMessagesClient,
+  DEFAULT_BEDROCK_MODEL,
+  type MessagesClient,
+} from "../core/llm-client";
 import type { Violation } from "../core/types";
 import { DEFAULT_MODEL, decideWhy, type WhyDecision } from "./generate";
 import { postReviewWithDecisions, type DecidedViolation } from "./review";
@@ -33,12 +38,14 @@ async function run(): Promise<void> {
     }
 
     const apiKey = core.getInput("anthropic-api-key");
-    if (!apiKey) {
-      core.setFailed(
-        "anthropic-api-key input is required. " +
-          "Set it from a workflow secret, e.g. " +
-          "`anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`.",
-      );
+    const bedrockApiKey = core.getInput("bedrock-api-key");
+    const bedrockRegion = core.getInput("bedrock-region");
+    let client: MessagesClient;
+    try {
+      client = createMessagesClient({ apiKey, bedrockApiKey, bedrockRegion });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      core.setFailed(message);
       return;
     }
 
@@ -54,7 +61,9 @@ async function run(): Promise<void> {
     const headSha = pr.head.sha as string;
 
     const bypassLabel = core.getInput("bypass-label") || DEFAULT_BYPASS_LABEL;
-    const model = core.getInput("anthropic-model") || DEFAULT_MODEL;
+    const model =
+      core.getInput("anthropic-model") ||
+      (bedrockApiKey ? DEFAULT_BEDROCK_MODEL : DEFAULT_MODEL);
     const maxSymbolsForAi = readMaxSymbolsForAi();
     const whyConfig = readWhyConfig();
     const bypassActive = hasBypassLabel(pr, bypassLabel);
@@ -121,7 +130,7 @@ async function run(): Promise<void> {
     core.info(
       `Calling Claude (${model}) for ${violations.length} symbol(s)...`,
     );
-    const decided = await decideAll({ apiKey, model, violations });
+    const decided = await decideAll({ client, model, violations });
 
     await postReviewWithDecisions({
       token: githubToken,
@@ -159,13 +168,13 @@ async function run(): Promise<void> {
  * something needs `@remarks` even when the AI couldn't be reached.
  */
 async function decideAll(args: {
-  apiKey: string;
+  client: MessagesClient;
   model: string;
   violations: Violation[];
 }): Promise<DecidedViolation[]> {
-  const { apiKey, model, violations } = args;
+  const { client, model, violations } = args;
   const settled = await Promise.allSettled(
-    violations.map((violation) => decideWhy({ apiKey, model, violation })),
+    violations.map((violation) => decideWhy({ client, model, violation })),
   );
 
   return settled.map((result, i) => {

@@ -4,6 +4,11 @@ import * as github from "@actions/github";
 import { fetchFileAtRef } from "../core/diff";
 import { findUndocumentedSymbols } from "../core/analyze";
 import { DEFAULT_WHY_RULES_CONFIG } from "../core/why-rules";
+import {
+  createMessagesClient,
+  DEFAULT_BEDROCK_MODEL,
+  type MessagesClient,
+} from "../core/llm-client";
 import { parseReplyMarker, REPLY_MARKER_PREFIX } from "./review";
 import { DEFAULT_MODEL } from "./generate";
 import { generateTsdocFromReply } from "./generate-from-reply";
@@ -31,12 +36,14 @@ async function run(): Promise<void> {
     }
 
     const apiKey = core.getInput("anthropic-api-key");
-    if (!apiKey) {
-      core.setFailed(
-        "anthropic-api-key input is required. " +
-          "Set it from a workflow secret, e.g. " +
-          "`anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`.",
-      );
+    const bedrockApiKey = core.getInput("bedrock-api-key");
+    const bedrockRegion = core.getInput("bedrock-region");
+    let client: MessagesClient;
+    try {
+      client = createMessagesClient({ apiKey, bedrockApiKey, bedrockRegion });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      core.setFailed(message);
       return;
     }
 
@@ -70,7 +77,9 @@ async function run(): Promise<void> {
       return;
     }
 
-    const model = core.getInput("anthropic-model") || DEFAULT_MODEL;
+    const model =
+      core.getInput("anthropic-model") ||
+      (bedrockApiKey ? DEFAULT_BEDROCK_MODEL : DEFAULT_MODEL);
     const { owner, repo } = context.repo;
     const octokit = github.getOctokit(githubToken);
 
@@ -174,7 +183,7 @@ async function run(): Promise<void> {
       `Generating TSDoc for ${marker.sym} (${target.kind}) from reply (${comment.body?.length ?? 0} chars).`,
     );
     const tsdoc = await generateTsdocFromReply({
-      apiKey,
+      client,
       model,
       symbolName: target.symbolName,
       kind: target.kind,

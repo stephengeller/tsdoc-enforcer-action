@@ -8,18 +8,24 @@ branding:
 # Consumer workflow must grant:
 #   permissions.contents: write       (to commit the generated TSDoc)
 #   permissions.pull-requests: write  (to post the threaded ack reply)
-# GITHUB_TOKEN is provided automatically by GitHub. ANTHROPIC_API_KEY must
-# be supplied as a secret and passed in via the `anthropic-api-key` input.
+# GITHUB_TOKEN is provided automatically by GitHub. Supply Claude credentials
+# via either a Bedrock API key (`bedrock-api-key` + `bedrock-region`, preferred)
+# or the `anthropic-api-key` input. Pass keys from workflow secrets.
 # Trigger this action on `pull_request_review_comment: [created]`.
 
 inputs:
   anthropic-api-key:
-    description: "Anthropic API key used to call Claude when turning an author's reply into a TSDoc block. Required. Pass via a workflow secret."
-    required: true
-  anthropic-model:
-    description: "Claude model ID. Defaults to `claude-sonnet-4-6` — same sweet spot the suggest variant uses."
+    description: "Anthropic API key for the direct API (api.anthropic.com). Provide this OR a Bedrock key. Pass via a workflow secret."
     required: false
-    default: "claude-sonnet-4-6"
+  bedrock-api-key:
+    description: "Amazon Bedrock API key (bearer token), used with `bedrock-region` to call Claude through Bedrock. Preferred: inference runs in your own AWS account with just a key stored as a workflow secret (no IAM role or OIDC). Takes precedence over `anthropic-api-key`."
+    required: false
+  bedrock-region:
+    description: "AWS region for the Bedrock endpoint (e.g. `us-east-1`). Required when `bedrock-api-key` is set."
+    required: false
+  anthropic-model:
+    description: "Claude model ID. No default here so the provider-appropriate default applies: direct API uses `claude-sonnet-4-6`, Bedrock uses `anthropic.claude-haiku-4-5`."
+    required: false
 
 runs:
   using: "node20"

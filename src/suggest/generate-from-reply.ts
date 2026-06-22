@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import * as core from "@actions/core";
 
+import type { MessagesClient } from "../core/llm-client";
 import { SYSTEM_PROMPT } from "../core/prompt";
 import { DEFAULT_MODEL } from "./generate";
 
@@ -41,7 +42,7 @@ const REPLY_TSDOC_TOOL: Anthropic.Tool = {
  *   `*\/`. The caller is responsible for indenting and splicing.
  */
 export async function generateTsdocFromReply(args: {
-  apiKey: string;
+  client: MessagesClient;
   model?: string;
   symbolName: string;
   kind: string;
@@ -49,16 +50,8 @@ export async function generateTsdocFromReply(args: {
   symbolSource: string;
   replyBody: string;
 }): Promise<string> {
-  const {
-    apiKey,
-    symbolName,
-    kind,
-    path,
-    symbolSource,
-    replyBody,
-  } = args;
+  const { client, symbolName, kind, path, symbolSource, replyBody } = args;
   const model = args.model || DEFAULT_MODEL;
-  const client = new Anthropic({ apiKey });
 
   const userMessage = buildReplyMessage({
     symbolName,

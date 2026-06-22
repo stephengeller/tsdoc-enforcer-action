@@ -37,9 +37,19 @@ Intentionally **not** checked: private/protected methods inside classes, paramet
 
 ### Doc Scribe (Suggest)
 
-Claude-powered inline review. Posts per-symbol TSDoc suggestions or targeted questions. Requires an Anthropic API key.
+Claude-powered inline review. Posts per-symbol TSDoc suggestions or targeted questions. Needs Claude credentials: either Amazon Bedrock (recommended) or an Anthropic API key.
+
+#### Credentials: Bedrock or API key
+
+The suggest and reply variants call Claude. Supply credentials one of two ways:
+
+- **Amazon Bedrock (recommended).** Generate a Bedrock API key in the AWS console, store it as a workflow secret, and pass it as `bedrock-api-key` along with `bedrock-region`. The action calls Claude through the Bedrock Messages-API endpoint with that key, so inference runs in your own AWS account (your billing, quota, and data-handling boundary). No IAM role, OIDC, or `configure-aws-credentials` step needed.
+- **Anthropic API key.** Set `anthropic-api-key` from a secret to use the direct API instead. Spend and data then flow through whatever account owns the key.
+
+If a Bedrock key is set, it wins.
 
 ```yaml
+# Recommended: Amazon Bedrock with a Bedrock API key
 name: Doc Scribe
 
 on:
@@ -56,21 +66,37 @@ jobs:
       - uses: actions/checkout@v4
       - uses: amberelectric/oem-github-actions@main
         with:
+          bedrock-api-key: ${{ secrets.BEDROCK_API_KEY }}
+          bedrock-region: us-east-1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+<details>
+<summary>Alternative: Anthropic API key</summary>
+
+```yaml
+      - uses: amberelectric/oem-github-actions@main
+        with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+</details>
+
 **Inputs**
 
-| Input                | Default             | Description                                                                                                                              |
-| -------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `anthropic-api-key`  | —                   | **Required.** Anthropic API key.                                                                                                         |
-| `anthropic-model`    | `claude-sonnet-4-6` | Claude model ID. Override to `claude-opus-4-7` for harder inference or `claude-haiku-4-5-20251001` for cheaper runs.                     |
-| `bypass-label`       | `why-acknowledged`  | Apply this label to a PR to skip the why-check entirely (useful for mechanical refactors).                                               |
-| `min-remarks-words`  | `15`                | Minimum word count for a `@remarks` block to satisfy the why-acceptance predicate.                                                       |
-| `why-keywords`       | `because,so that,…` | Comma-separated causal/constraint keywords. A `@remarks` block needs at least one keyword, a number-with-unit, or a `{@link}` reference. |
-| `max-symbols-for-ai` | `25`                | Hard cap on symbols sent to Claude per PR run. Above the cap, the check asks the author to document manually or apply the bypass label.  |
+| Input                | Default                                          | Description                                                                                                                              |
+| -------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `bedrock-api-key`    | —                                                | Amazon Bedrock API key (bearer token). Set this (with `bedrock-region`) **or** `anthropic-api-key`. Takes precedence.                    |
+| `bedrock-region`     | —                                                | AWS region for the Bedrock endpoint (e.g. `us-east-1`). Required when `bedrock-api-key` is set.                                          |
+| `anthropic-api-key`  | —                                                | Anthropic API key for the direct API. Set this **or** a Bedrock key.                                                                     |
+| `anthropic-model`    | `claude-sonnet-4-6` (API) / `anthropic.claude-haiku-4-5` (Bedrock) | Claude model ID. On Bedrock, use a `anthropic.`-prefixed id; e.g. `anthropic.claude-opus-4-8` for stronger inference. |
+| `bypass-label`       | `why-acknowledged`                               | Apply this label to a PR to skip the why-check entirely (useful for mechanical refactors).                                              |
+| `min-remarks-words`  | `15`                                             | Minimum word count for a `@remarks` block to satisfy the why-acceptance predicate.                                                       |
+| `why-keywords`       | `because,so that,…`                              | Comma-separated causal/constraint keywords. A `@remarks` block needs at least one keyword, a number-with-unit, or a `{@link}` reference. |
+| `max-symbols-for-ai` | `25`                                             | Hard cap on symbols sent to Claude per PR run. Above the cap, the check asks the author to document manually or apply the bypass label.  |
 
 ---
 
@@ -108,10 +134,14 @@ The handler only reacts to replies on threads it posted (identified by a hidden 
 
 **Inputs**
 
-| Input               | Default             | Description                      |
-| ------------------- | ------------------- | -------------------------------- |
-| `anthropic-api-key` | —                   | **Required.** Anthropic API key. |
-| `anthropic-model`   | `claude-sonnet-4-6` | Claude model ID.                 |
+Same credential model as the suggest variant (a Bedrock API key, or an Anthropic API key); see [Credentials: Bedrock or API key](#credentials-bedrock-or-api-key). For Bedrock, pass `bedrock-api-key` + `bedrock-region` instead of `anthropic-api-key`.
+
+| Input               | Default                                          | Description                                                                |
+| ------------------- | ------------------------------------------------ | -------------------------------------------------------------------------- |
+| `bedrock-api-key`   | —                                                | Amazon Bedrock API key. Set this (with `bedrock-region`) **or** `anthropic-api-key`. |
+| `bedrock-region`    | —                                                | AWS region for the Bedrock endpoint. Required when `bedrock-api-key` is set. |
+| `anthropic-api-key` | —                                                | Anthropic API key for the direct API. Set this **or** a Bedrock key.       |
+| `anthropic-model`   | `claude-sonnet-4-6` / `anthropic.claude-haiku-4-5` (Bedrock) | Claude model ID.                                               |
 
 ---
 

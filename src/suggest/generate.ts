@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import * as core from "@actions/core";
 
 import type { Violation } from "../core/types";
+import type { MessagesClient } from "../core/llm-client";
 import { SYSTEM_PROMPT, buildWhyDecisionMessage } from "../core/prompt";
 
 /**
@@ -136,13 +137,12 @@ const WHY_DECISION_TOOL: Anthropic.Tool = {
  *   review layer.
  */
 export async function decideWhy(args: {
-  apiKey: string;
+  client: MessagesClient;
   model?: string;
   violation: Violation;
 }): Promise<WhyDecision> {
-  const { apiKey, violation } = args;
+  const { client, violation } = args;
   const model = args.model || DEFAULT_MODEL;
-  const client = new Anthropic({ apiKey });
 
   let response: Anthropic.Message;
   try {

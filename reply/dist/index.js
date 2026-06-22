@@ -252055,6 +252055,75 @@ async function fetchFileAtRef(args) {
 
 /***/ }),
 
+/***/ 7410:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DEFAULT_BEDROCK_MODEL = void 0;
+exports.createMessagesClient = createMessagesClient;
+const sdk_1 = __importDefault(__nccwpck_require__(121));
+/**
+ * Default model for the Bedrock path.
+ *
+ * @remarks
+ * The Bedrock Messages-API endpoint does not serve Sonnet 4.6 (that model is
+ * only on the older InvokeModel path), so the direct-API default can't carry
+ * over. Haiku 4.5 is the cheapest model the endpoint serves and is ample for
+ * short per-symbol why-inference; bump `anthropic-model` to
+ * `anthropic.claude-opus-4-8` when stronger inference is worth the cost.
+ */
+exports.DEFAULT_BEDROCK_MODEL = "anthropic.claude-haiku-4-5";
+/**
+ * Builds the Bedrock Messages-API base URL for a region.
+ *
+ * @remarks
+ * The SDK appends `/v1/messages`, so the base URL stops at `/anthropic`.
+ *
+ * @param region - AWS region, e.g. `us-east-1`.
+ * @returns The base URL the Claude client should target.
+ */
+function bedrockBaseUrl(region) {
+    return `https://bedrock-mantle.${region}.api.aws/anthropic`;
+}
+/**
+ * Builds the Claude client from whichever credential the consumer supplied.
+ *
+ * @remarks
+ * Bedrock is preferred when a Bedrock API key is set: inference then runs
+ * inside the consumer's own AWS account (their billing, quota, and
+ * data-handling boundary), reached with a single long-lived key stored as a
+ * workflow secret — no AWS request-signing, IAM role, or OIDC setup. The
+ * direct-API path is the no-AWS fallback.
+ *
+ * @param opts - `bedrockApiKey` + `bedrockRegion` select Bedrock; `apiKey`
+ *   selects the direct API. Bedrock wins when its key is present.
+ * @returns A configured Claude client.
+ */
+function createMessagesClient(opts) {
+    if (opts.bedrockApiKey) {
+        if (!opts.bedrockRegion) {
+            throw new Error("`bedrock-region` is required when `bedrock-api-key` is set (it selects the Bedrock endpoint region).");
+        }
+        return new sdk_1.default({
+            apiKey: opts.bedrockApiKey,
+            baseURL: bedrockBaseUrl(opts.bedrockRegion),
+        });
+    }
+    if (opts.apiKey) {
+        return new sdk_1.default({ apiKey: opts.apiKey });
+    }
+    throw new Error("No Claude credentials configured: set `bedrock-api-key` + `bedrock-region` " +
+        "(preferred), or `anthropic-api-key`.");
+}
+
+
+/***/ }),
+
 /***/ 5301:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -252528,12 +252597,8 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.generateTsdocFromReply = generateTsdocFromReply;
-const sdk_1 = __importDefault(__nccwpck_require__(121));
 const core = __importStar(__nccwpck_require__(7484));
 const prompt_1 = __nccwpck_require__(5301);
 const generate_1 = __nccwpck_require__(3531);
@@ -252570,9 +252635,8 @@ const REPLY_TSDOC_TOOL = {
  *   `*\/`. The caller is responsible for indenting and splicing.
  */
 async function generateTsdocFromReply(args) {
-    const { apiKey, symbolName, kind, path, symbolSource, replyBody, } = args;
+    const { client, symbolName, kind, path, symbolSource, replyBody } = args;
     const model = args.model || generate_1.DEFAULT_MODEL;
-    const client = new sdk_1.default({ apiKey });
     const userMessage = buildReplyMessage({
         symbolName,
         kind,
@@ -252683,13 +252747,9 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DEFAULT_MODEL = void 0;
 exports.decideWhy = decideWhy;
-const sdk_1 = __importDefault(__nccwpck_require__(121));
 const core = __importStar(__nccwpck_require__(7484));
 const prompt_1 = __nccwpck_require__(5301);
 /**
@@ -252782,9 +252842,8 @@ const WHY_DECISION_TOOL = {
  *   review layer.
  */
 async function decideWhy(args) {
-    const { apiKey, violation } = args;
+    const { client, violation } = args;
     const model = args.model || exports.DEFAULT_MODEL;
-    const client = new sdk_1.default({ apiKey });
     let response;
     try {
         response = await client.messages.create({
@@ -252980,6 +253039,7 @@ const github = __importStar(__nccwpck_require__(3228));
 const diff_1 = __nccwpck_require__(6292);
 const analyze_1 = __nccwpck_require__(3127);
 const why_rules_1 = __nccwpck_require__(727);
+const llm_client_1 = __nccwpck_require__(7410);
 const review_1 = __nccwpck_require__(5288);
 const generate_1 = __nccwpck_require__(3531);
 const generate_from_reply_1 = __nccwpck_require__(8485);
@@ -253005,10 +253065,15 @@ async function run() {
             return;
         }
         const apiKey = core.getInput("anthropic-api-key");
-        if (!apiKey) {
-            core.setFailed("anthropic-api-key input is required. " +
-                "Set it from a workflow secret, e.g. " +
-                "`anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`.");
+        const bedrockApiKey = core.getInput("bedrock-api-key");
+        const bedrockRegion = core.getInput("bedrock-region");
+        let client;
+        try {
+            client = (0, llm_client_1.createMessagesClient)({ apiKey, bedrockApiKey, bedrockRegion });
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            core.setFailed(message);
             return;
         }
         const { context } = github;
@@ -253034,7 +253099,8 @@ async function run() {
             core.info(`Skipping: comment author ${comment.user?.login} is a bot — ignoring our own replies.`);
             return;
         }
-        const model = core.getInput("anthropic-model") || generate_1.DEFAULT_MODEL;
+        const model = core.getInput("anthropic-model") ||
+            (bedrockApiKey ? llm_client_1.DEFAULT_BEDROCK_MODEL : generate_1.DEFAULT_MODEL);
         const { owner, repo } = context.repo;
         const octokit = github.getOctokit(githubToken);
         const parent = await octokit.rest.pulls.getReviewComment({
@@ -253098,7 +253164,7 @@ async function run() {
         }
         core.info(`Generating TSDoc for ${marker.sym} (${target.kind}) from reply (${comment.body?.length ?? 0} chars).`);
         const tsdoc = await (0, generate_from_reply_1.generateTsdocFromReply)({
-            apiKey,
+            client,
             model,
             symbolName: target.symbolName,
             kind: target.kind,

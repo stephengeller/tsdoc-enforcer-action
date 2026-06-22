@@ -8,17 +8,23 @@ branding:
 # Consumer workflow must grant:
 #   permissions.pull-requests: write (to post the PR review + inline comments)
 #   permissions.contents: read      (to fetch changed files)
-# GITHUB_TOKEN is provided automatically by GitHub. ANTHROPIC_API_KEY must
-# be supplied as a secret and passed in via the `anthropic-api-key` input.
+# GITHUB_TOKEN is provided automatically by GitHub. Supply Claude credentials
+# via either a Bedrock API key (`bedrock-api-key` + `bedrock-region`, preferred)
+# or the `anthropic-api-key` input. Pass keys from workflow secrets.
 
 inputs:
   anthropic-api-key:
-    description: "Anthropic API key used to call Claude for per-symbol why-inference. Required. Pass via a workflow secret — see README for an example workflow."
-    required: true
-  anthropic-model:
-    description: "Claude model ID used for why-inference. Defaults to `claude-sonnet-4-6` — best price/quality for short structured outputs. Override to `claude-opus-4-7` for harder inference or `claude-haiku-4-5-20251001` for faster/cheaper runs."
+    description: "Anthropic API key for the direct API (api.anthropic.com). Provide this OR a Bedrock key. Pass via a workflow secret."
     required: false
-    default: "claude-sonnet-4-6"
+  bedrock-api-key:
+    description: "Amazon Bedrock API key (bearer token), used with `bedrock-region` to call Claude through Bedrock. Preferred: inference runs in your own AWS account, authenticated with just a key stored as a workflow secret (no IAM role or OIDC). Takes precedence over `anthropic-api-key`."
+    required: false
+  bedrock-region:
+    description: "AWS region for the Bedrock endpoint (e.g. `us-east-1`). Required when `bedrock-api-key` is set."
+    required: false
+  anthropic-model:
+    description: "Claude model ID for why-inference. No default here so the provider-appropriate default applies: the direct API uses `claude-sonnet-4-6`, Bedrock uses `anthropic.claude-haiku-4-5`. Override with another model ID, e.g. `anthropic.claude-opus-4-8` on Bedrock for stronger inference."
+    required: false
   bypass-label:
     description: "Apply this label to a PR to soft-bypass the why-check. When applied, AI inference is skipped entirely and the check passes. Use sparingly — it's the escape hatch, not the default."
     required: false
